@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # where liquidsoap writes HLS segments; served by us at /hls/
     hls_dir: Path = Path.home() / ".local/state/kalliope/hls"
 
+    # listeners hear the stream ~this many seconds after the mixer plays it
+    # (harbor burst buffer); the now-playing display waits to match their ears
+    display_latency_s: float = 2.7
+
     # rotation: don't repeat a track aired within this window (auto-relaxes
     # if the eligible set empties — small libraries must still play)
     no_repeat_hours: float = 6.0

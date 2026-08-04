@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ log = logging.getLogger("kalliope")
 class BreakItem:
     wav: Path
     transcript: str
+    duration: float
 
 
 class Station:
@@ -54,8 +56,10 @@ class Station:
         # plays when the deck runs dry (dead-air fallback, SPEC §1.2)
         self.deck: deque[Track | BreakItem] = deque()
         self.planning = False
-        self.break_transcripts: dict[str, str] = {}  # wav path -> script
+        self.breaks_out: dict[str, BreakItem] = {}   # wav path -> handed-out break
         self.break_busy = False                       # manual /dj/break guard
+        # timing diagnostics: what's on air and how long it should run
+        self._on_air: tuple[str, float | None, float] | None = None  # label, expected_s, monotonic
 
     def tune_in(self, who: str) -> None:
         self.listeners[who] = now_iso()
@@ -83,10 +87,15 @@ class Station:
         if self.deck:
             item = self.deck.popleft()
             if isinstance(item, BreakItem):
-                self.break_transcripts[str(item.wav)] = item.transcript
-                log.info("handing out: [break] %s", item.wav.name)
-                # short fades so speech isn't chopped by the crossfade defaults
-                uri = f"annotate:liq_fade_in=0.2,liq_fade_out=0.5:{item.wav}"
+                self.breaks_out[str(item.wav)] = item
+                log.info("handing out: [break] %s (%.1fs)", item.wav.name, item.duration)
+                # tight fades AND a tiny cross window: the default 3s cross
+                # would overlap the last seconds of speech with the next
+                # track's intro (and swallow the first under the outgoing one)
+                uri = (
+                    "annotate:liq_fade_in=0.1,liq_fade_out=0.1,"
+                    f"liq_cross_duration=0.3:{item.wav}"
+                )
             else:
                 log.info("handing out (deck): %s — %s",
                          item.display_artist, item.display_title)
@@ -98,6 +107,28 @@ class Station:
                          track.display_artist, track.display_title)
                 uri = str(track.abs_path)
         return uri
+
+    def log_transition(self, incoming: str) -> None:
+        """Timing diagnostics: how long did the outgoing item actually run
+        vs how long its file said it should? Big negative deltas mean the
+        mixer is eating content (crossfade overlap, decoder trouble)."""
+        now = time.monotonic()
+        if self._on_air is not None:
+            label, expected, since = self._on_air
+            ran = now - since
+            if expected:
+                log.info("timing: %s ran %.1fs on air (file is %.1fs, delta %+.1fs)",
+                         label, ran, expected, ran - expected)
+            else:
+                log.info("timing: %s ran %.1fs on air (untagged duration)", label, ran)
+        brk = self.breaks_out.get(incoming)
+        if brk is not None:
+            self._on_air = (f"[break] {brk.wav.name}", brk.duration, now)
+        else:
+            track = self.catalog.by_abs_path(incoming)
+            label = (f"{track.display_artist} — {track.display_title}"
+                     if track else Path(incoming).name)
+            self._on_air = (label, track.duration if track else None, now)
 
     def deck_running_low(self) -> bool:
         music_left = sum(1 for i in self.deck if not isinstance(i, BreakItem))
@@ -124,11 +155,14 @@ class Station:
             plan = self.dj.plan_set(self._state_doc(), self.catalog)
             items: list[Track | BreakItem] = list(plan.tracks)
             if plan.break_after is not None and plan.break_script:
-                wav = render_break(
+                audio = render_break(
                     plan.break_script, self.settings.piper_voice,
                     self.settings.breaks_dir,
                 )
-                items.insert(plan.break_after + 1, BreakItem(wav, plan.break_script))
+                items.insert(
+                    plan.break_after + 1,
+                    BreakItem(audio.path, plan.break_script, audio.duration),
+                )
             self.picker.mark_planned(t.hash for t in plan.tracks if t.hash)
             if plan.note:
                 self.radio_db.record_event("dj_note", data={"note": plan.note})
@@ -144,12 +178,12 @@ class Station:
         Worker thread; failures logged and swallowed."""
         try:
             result = self.dj.write_break(self._state_doc())
-            wav = render_break(
+            audio = render_break(
                 result.script, self.settings.piper_voice, self.settings.breaks_dir
             )
             if result.note:
                 self.radio_db.record_event("dj_note", data={"note": result.note})
-            self.deck.appendleft(BreakItem(wav, result.script))
+            self.deck.appendleft(BreakItem(audio.path, result.script, audio.duration))
             log.info("break ready: %r", result.script[:80])
         except Exception:
             log.exception("break generation failed — music continues")
@@ -191,38 +225,50 @@ def build_app(settings: Settings) -> FastAPI:
         return PlainTextResponse(uri)
 
     @app.post("/aired")
-    def aired(event: AiredEvent, request: Request) -> JSONResponse:
+    async def aired(event: AiredEvent, request: Request) -> JSONResponse:
         station: Station = request.app.state.station
-        transcript = station.break_transcripts.pop(event.filename, None)
-        if transcript is not None:
-            station.radio_db.record_event(
-                "break_aired", data={"transcript": transcript}
+        station.log_transition(event.filename)
+
+        def show(np: NowPlaying) -> None:
+            station.now_playing = np
+
+        def show_later(np: NowPlaying) -> None:
+            # the display flips when *listeners* hear the change, not when
+            # the mixer does — harbor's burst buffer runs ~2.7s behind
+            asyncio.get_running_loop().call_later(
+                settings.display_latency_s, show, np
             )
-            station.now_playing = NowPlaying(
+
+        brk = station.breaks_out.pop(event.filename, None)
+        if brk is not None:
+            station.radio_db.record_event(
+                "break_aired", data={"transcript": brk.transcript}
+            )
+            show_later(NowPlaying(
                 station=station.settings.station_name,
                 started_at=now_iso(),
                 track=None,
                 source_context="break",
-            )
-            log.info("on air: [break] %r", transcript[:80])
+            ))
+            log.info("on air: [break] %r", brk.transcript[:80])
             return JSONResponse({"recorded": True, "break": True})
         track = station.catalog.by_abs_path(event.filename)
         if track is None:
             # not in the catalog (e.g. a future jingle file) — still surface
             # it as now-playing, just don't write history
             log.info("aired non-catalog file: %s", event.filename)
-            station.now_playing = NowPlaying(
+            show_later(NowPlaying(
                 station=station.settings.station_name,
                 started_at=now_iso(),
                 track=None,
-            )
+            ))
             return JSONResponse({"recorded": False})
         station.radio_db.record_play(track, context="rotation")
-        station.now_playing = NowPlaying(
+        show_later(NowPlaying(
             station=station.settings.station_name,
             started_at=now_iso(),
             track=track,
-        )
+        ))
         log.info("on air: %s — %s", track.display_artist, track.display_title)
         return JSONResponse({"recorded": track.hash is not None})
 

@@ -79,6 +79,7 @@ Everything is environment variables (or `.env`):
 | `KALLIOPE_PIPER_VOICE` | `…/voices/en_US-lessac-medium.onnx` | TTS voice model |
 | `KALLIOPE_PATINA` | `0.002` | Static bed gain; `0` for a clean signal |
 | `KALLIOPE_WARMTH` | `on` | Gentle bandpass; `off` to disable |
+| `KALLIOPE_AUTO_UPDATE` | `on` | `run.sh` fast-forwards to origin/main on start (stashes local edits, never blocks startup); `off` for development checkouts |
 
 ## How it fits together
 
