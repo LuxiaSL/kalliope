@@ -87,9 +87,10 @@ def build_state_doc(
     """The rolling station state doc (SPEC §1.3), assembled per call."""
     now = datetime.now()
     lines = [
-        f"It is {now.strftime('%A, %H:%M')}.",
-        f"Listeners right now: {len(listeners)}"
-        + (f" (tuned in at: {', '.join(sorted(listeners.values()))})" if listeners else ""),
+        f"You're writing this on {now.strftime('%A')} around {now.strftime('%H:%M')}. "
+        "It airs minutes from now — tape delay rules apply.",
+        f"Tuned in as you write (may well change by airtime): {len(listeners)}"
+        + (f" (since: {', '.join(sorted(listeners.values()))})" if listeners else ""),
         "",
         "Recently aired (newest first):",
     ]
