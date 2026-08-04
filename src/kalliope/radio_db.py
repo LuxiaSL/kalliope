@@ -28,10 +28,11 @@ CREATE TABLE IF NOT EXISTS plays (
 CREATE INDEX IF NOT EXISTS idx_plays_hash_time ON plays (track_hash, aired_at);
 
 CREATE TABLE IF NOT EXISTS genres (
-  track_id INTEGER NOT NULL REFERENCES tracks(id),
+  track_hash TEXT NOT NULL,
   genre TEXT NOT NULL,
-  source TEXT NOT NULL CHECK (source IN ('tag','spotify','manual','inferred')),
-  PRIMARY KEY (track_id, genre, source)
+  source TEXT NOT NULL CHECK
+    (source IN ('tag','spotify','musicbrainz','manual','inferred')),
+  PRIMARY KEY (track_hash, genre, source)
 );
 
 CREATE TABLE IF NOT EXISTS playlists (
@@ -74,8 +75,36 @@ class RadioDB:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA busy_timeout = 5000")
+        self._migrate()
         with self._conn:
             self._conn.executescript(_SCHEMA)
+
+    def _migrate(self) -> None:
+        """One-shot schema fixes for kalliope-owned tables (never freshpool's).
+
+        genres originally keyed by track_id; hash is the durable identity
+        (docs/catalog.md), so the empty v0 table gets rebuilt keyed by hash.
+        A non-empty old-shape table is left alone and logged — losing rows is
+        worse than living with the old shape.
+        """
+        try:
+            row = self._conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'genres'"
+            ).fetchone()
+            if row is None or "track_hash" in row["sql"]:
+                return
+            (n,) = self._conn.execute("SELECT COUNT(*) FROM genres").fetchone()
+            if n:
+                log.warning(
+                    "genres table has old track_id schema with %d rows — "
+                    "leaving it; migrate by hand if genre lookups misbehave", n
+                )
+                return
+            with self._conn:
+                self._conn.execute("DROP TABLE genres")
+            log.info("rebuilt empty genres table keyed by track_hash")
+        except sqlite3.Error:
+            log.exception("genres migration failed — continuing with old shape")
 
     def close(self) -> None:
         self._conn.close()

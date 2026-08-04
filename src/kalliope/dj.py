@@ -43,7 +43,13 @@ sample for serendipity — then commit an ordered set with set_the_decks.
 
 Craft, in order of importance:
 - Sequence for flow. Follow something heavy with somewhere to land. Changes
-  of direction are welcome; whiplash every transition is not.
+  of direction are welcome; whiplash every transition is not. Where tool
+  results carry bpm, energy, and genres, use them as sequencing instruments —
+  they're measured from the audio, so they're the closest thing you have to
+  ears. Where they're absent, the analyzer just hasn't gotten there yet.
+- genre_search and genre_map are how you move by sound instead of by name:
+  map the terrain, then pull from a corner of it. Genre labels come from
+  MusicBrainz and inference — treat them as good directions, not gospel.
 - Work the fresh pool in. New arrivals earn spins; that's how they graduate.
   But a set of all-new is a demo reel, not a show — blend with the library.
 - Respect the history you can see. spins and last_aired are in every tool
@@ -210,6 +216,23 @@ class DJ:
             return json.dumps(catalog.sample(min(limit, 50)))
 
         @beta_tool
+        def genre_search(genre: str, limit: int = 25) -> str:
+            """Pull tracks tagged with a genre (substring: 'punk' finds
+            post-punk too). Random order, so repeat calls dig deeper.
+
+            Args:
+                genre: Genre label or fragment to match.
+                limit: Maximum rows to return.
+            """
+            return json.dumps(catalog.by_genre(genre, min(limit, 50)))
+
+        @beta_tool
+        def genre_map() -> str:
+            """The library's terrain: every genre on file with its track
+            count, biggest first. Good first move when planning by mood."""
+            return json.dumps(catalog.genre_map())
+
+        @beta_tool
         def set_the_decks(
             track_ids: list[int],
             break_after: int = -1,
@@ -260,7 +283,8 @@ class DJ:
                     },
                 ],
                 messages=[{"role": "user", "content": state_doc}],
-                tools=[search_catalog, fresh_pool, random_sample, set_the_decks],
+                tools=[search_catalog, fresh_pool, random_sample,
+                       genre_search, genre_map, set_the_decks],
             )
             usage_in = usage_out = 0
             for i, message in enumerate(runner):

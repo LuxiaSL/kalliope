@@ -33,6 +33,8 @@
   #np { margin-top: 2.5rem; min-height: 3.5rem; }
   #np .title { font-size: 1.05rem; }
   #np .artist { color: var(--dim); margin-top: 0.35rem; font-size: 0.9rem; }
+  #np .genres { color: var(--dim); margin-top: 0.6rem; font-size: 0.7rem;
+                letter-spacing: 0.08em; opacity: 0.8; }
   #status { color: var(--dim); font-size: 0.75rem; margin-top: 2.5rem;
             letter-spacing: 0.1em; }
 </style>
@@ -41,7 +43,7 @@
 <main>
   <h1>kalliope</h1>
   <button id="tune" aria-label="tune in">tune in</button>
-  <div id="np"><div class="title"></div><div class="artist"></div></div>
+  <div id="np"><div class="title"></div><div class="artist"></div><div class="genres"></div></div>
   <div id="status">off</div>
   <audio id="radio" preload="none"></audio>
 </main>
@@ -51,6 +53,7 @@
   const status = document.getElementById("status");
   const npTitle = document.querySelector("#np .title");
   const npArtist = document.querySelector("#np .artist");
+  const npGenres = document.querySelector("#np .genres");
   let streamPath = null;
   let tunedIn = false;
 
@@ -68,12 +71,15 @@
       if (now.track) {
         npTitle.textContent = now.track.title || now.track.path;
         npArtist.textContent = (now.track.artist || "").split("/")[0];
+        npGenres.textContent = (now.genres || []).slice(0, 4).join(" · ");
       } else if (now.source_context === "break") {
         npTitle.textContent = "· station break ·";
         npArtist.textContent = "";
+        npGenres.textContent = "";
       } else {
         npTitle.textContent = "";
         npArtist.textContent = "";
+        npGenres.textContent = "";
       }
       if (tunedIn) {
         const n = now.listeners || 0;

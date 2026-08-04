@@ -56,8 +56,17 @@ cd -
 # 3. (optional) the DJ's brain — .env in the repo root, gitignored
 echo 'ANTHROPIC_API_KEY="sk-ant-..."' > .env && chmod 600 .env
 
-# 4. on air
+# 4. (optional) a nicer voice — ElevenLabs key in the same .env; used
+#    automatically when present, falls back to piper when it fails
+echo 'ELEVENLABS_API_KEY="..."' >> .env
+
+# 5. on air
 ./station/run.sh
+
+# 6. (optional, anytime) enrich the catalog — the DJ sequences better with
+#    measured tempo/energy and genre labels in its tool results
+uv run scripts/analyze.py     # bpm / energy / intro / outro / LUFS per track
+uv run scripts/genres.py      # genres via MusicBrainz + Claude inference
 ```
 
 Player at **http://127.0.0.1:8321/** — one big tune-in button, now-playing,
@@ -76,7 +85,11 @@ Everything is environment variables (or `.env`):
 | `ANTHROPIC_API_KEY` | — | DJ brain; absent = DJ-less station |
 | `KALLIOPE_DJ_MODEL` | `claude-opus-5` | `claude-sonnet-5` cuts cost ~4x |
 | `KALLIOPE_DJ_ENABLED` | `true` | Hard off-switch for the DJ |
-| `KALLIOPE_PIPER_VOICE` | `…/voices/en_US-lessac-medium.onnx` | TTS voice model |
+| `ELEVENLABS_API_KEY` | — | Premium TTS voice; absent = piper |
+| `KALLIOPE_TTS_BACKEND` | `auto` | `piper` forces local; `auto` prefers ElevenLabs when keyed |
+| `KALLIOPE_ELEVENLABS_VOICE` | George | Any voice id from `GET /v1/voices` |
+| `KALLIOPE_ELEVENLABS_MODEL` | `eleven_flash_v2_5` | `eleven_multilingual_v2` for max quality at 2x credits |
+| `KALLIOPE_PIPER_VOICE` | `…/voices/en_US-lessac-medium.onnx` | Local/fallback TTS voice model |
 | `KALLIOPE_PATINA` | `0.002` | Static bed gain; `0` for a clean signal |
 | `KALLIOPE_WARMTH` | `on` | Gentle bandpass; `off` to disable |
 | `KALLIOPE_AUTO_UPDATE` | `on` | `run.sh` fast-forwards to origin/main on start (stashes local edits, never blocks startup); `off` for development checkouts |
@@ -104,9 +117,11 @@ Everything is environment variables (or `.env`):
 ## Status
 
 Working: continuous stream, crossfades, patina, DJ set-planning with breaks,
-listener presence (tune-ins are events the DJ can see), play history, web
-player. Planned, per [`SPEC.md`](SPEC.md): the request line ("call in"),
-show-open bits when someone tunes in, talk-over-intro ducking, an audio
-analysis pass (BPM/energy/intro length), Android client.
+listener presence (tune-ins are events the DJ can see), play history, audio
+analysis (BPM/energy/intro/outro/LUFS via `scripts/analyze.py`), genre
+backfill (MusicBrainz + inference via `scripts/genres.py`) feeding the DJ's
+catalog tools and the player display, ElevenLabs voice with piper fallback,
+web player. Planned, per [`SPEC.md`](SPEC.md): the request line ("call in"),
+show-open bits when someone tunes in, talk-over-intro ducking, Android client.
 
 Runs on a laptop. Meant to feel less like an app and more like a place.

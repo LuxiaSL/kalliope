@@ -155,10 +155,7 @@ class Station:
             plan = self.dj.plan_set(self._state_doc(), self.catalog)
             items: list[Track | BreakItem] = list(plan.tracks)
             if plan.break_after is not None and plan.break_script:
-                audio = render_break(
-                    plan.break_script, self.settings.piper_voice,
-                    self.settings.breaks_dir,
-                )
+                audio = render_break(plan.break_script, self.settings)
                 items.insert(
                     plan.break_after + 1,
                     BreakItem(audio.path, plan.break_script, audio.duration),
@@ -178,9 +175,7 @@ class Station:
         Worker thread; failures logged and swallowed."""
         try:
             result = self.dj.write_break(self._state_doc())
-            audio = render_break(
-                result.script, self.settings.piper_voice, self.settings.breaks_dir
-            )
+            audio = render_break(result.script, self.settings)
             if result.note:
                 self.radio_db.record_event("dj_note", data={"note": result.note})
             self.deck.appendleft(BreakItem(audio.path, result.script, audio.duration))
@@ -308,6 +303,10 @@ def build_app(settings: Settings) -> FastAPI:
         payload = station.now_playing.model_dump(mode="json")
         payload["stream_path"] = f":{settings.harbor_port}/stream"
         payload["listeners"] = len(station.listeners)
+        track = station.now_playing.track
+        payload["genres"] = (
+            station.catalog.genres_for(track.hash) if track else []
+        )
         payload["deck"] = [
             "break" if isinstance(i, BreakItem)
             else f"{i.display_artist} — {i.display_title}"

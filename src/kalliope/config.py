@@ -8,6 +8,7 @@ never hardcode.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,6 +57,23 @@ class Settings(BaseSettings):
     # brief (dj.PLANNING_BRIEF) — they're editorial judgment, not config
 
     # --- TTS --------------------------------------------------------------
+    # "auto" = ElevenLabs when a key is present, Piper otherwise; either way
+    # a failed render falls through to Piper (the break must not die for a
+    # flaky API)
+    tts_backend: Literal["auto", "elevenlabs", "piper"] = "auto"
+    elevenlabs_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "ELEVENLABS_API_KEY", "KALLIOPE_ELEVENLABS_API_KEY"
+        ),
+    )
+    # George — the docs' own example voice; warm, unhurried narration.
+    # List alternatives: curl -H "xi-api-key: $ELEVENLABS_API_KEY" \
+    #   https://api.elevenlabs.io/v1/voices
+    elevenlabs_voice: str = "JBFqnCBsd6RMkjVDRZzb"
+    # flash_v2_5 is half the credits of multilingual_v2 and still a tier
+    # above local TTS; swap for "eleven_multilingual_v2" if credits allow
+    elevenlabs_model: str = "eleven_flash_v2_5"
     piper_voice: Path = Path.home() / ".local/state/kalliope/voices/en_US-lessac-medium.onnx"
     breaks_dir: Path = Path.home() / ".local/state/kalliope/breaks"
 

@@ -99,12 +99,19 @@ CREATE TABLE IF NOT EXISTS plays (
   context TEXT                    -- 'rotation' | 'request' | 'show_open' | ...
 );
 
--- multi-genre, multi-source; supersedes tracks.genre for sequencing
+-- multi-genre, multi-source; supersedes tracks.genre for sequencing.
+-- Keyed by hash (2026-08-04 rebuild: originally track_id, but hash is the
+-- durable identity — genre rows must survive pool → library promotion).
+-- Backfilled by scripts/genres.py: MusicBrainz artist tags first
+-- (source='musicbrainz'), Claude inference for the artists MB doesn't know
+-- (source='inferred'). Spotify genre metadata is dead for new apps —
+-- 'spotify' remains legal for old data but nothing writes it today.
 CREATE TABLE IF NOT EXISTS genres (
-  track_id INTEGER NOT NULL REFERENCES tracks(id),
+  track_hash TEXT NOT NULL,
   genre TEXT NOT NULL,
-  source TEXT NOT NULL CHECK (source IN ('tag','spotify','manual','inferred')),
-  PRIMARY KEY (track_id, genre, source)
+  source TEXT NOT NULL CHECK
+    (source IN ('tag','spotify','musicbrainz','manual','inferred')),
+  PRIMARY KEY (track_hash, genre, source)
 );
 
 CREATE TABLE IF NOT EXISTS playlists (
@@ -148,6 +155,13 @@ CREATE TABLE IF NOT EXISTS track_analysis (
 "Analyzed?" = the hash has a row here with `bpm IS NOT NULL`. The DJ/mixer
 must have NULL-safe fallbacks (mixer defaults) indefinitely — the analyzer
 backfills lazily and new pool tracks arrive faster than it runs.
+
+`scripts/analyze.py` is the backfiller (one ffmpeg decode + librosa +
+pyloudnorm per track; incremental by `analyzer_version`). v1 semantics to
+keep honest about: `energy` is relative onset density (compare within the
+library, not across analyzers), and `intro_len` is a *quiet-intro* proxy —
+seconds until RMS holds above half the track median — not true vocal
+detection. Good enough to place talk-overs; don't oversell it.
 
 ## Query cookbook
 

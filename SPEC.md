@@ -145,3 +145,6 @@ The dead-air watchdog (§1.2) is what "always" means in practice: DJ down ≠ st
 - Personas: **shared station identity**, per-listener memory (it's what a real station does).
 - DJ persona: **Cal** ([`station/persona.md`](station/persona.md)) — deadpan public radio; a Claude, and it comes up about as often as being from Ohio would. Claude-authored, fittingly.
 - Signal: **patina on** — a whisper of lowpassed hiss under everything (survives dead air: the carrier always sounds live) + gentle 48Hz–11.5kHz bandpass warmth. `KALLIOPE_PATINA` (gain, 0 disables) / `KALLIOPE_WARMTH` (on/off).
+- TTS: **ElevenLabs when keyed, piper as the always-there fallback** — a failed API render must degrade to a worse voice, never to a lost break. Flash v2.5 by default (half credits; free tier ≈ sixty breaks/month).
+- Genres: **artist-level, from MusicBrainz + Claude inference** (`scripts/genres.py`), keyed by hash like analysis. Spotify's genre metadata is dead for new apps; the `tracks.genre` column stays empty in practice. Provenance in `genres.source`.
+- Analyzer: **`scripts/analyze.py` shipped** (bpm/energy/intro/outro/LUFS, v1 semantics documented in docs/catalog.md); browse tools carry bpm/energy/genres so sequencing-by-sound is real. Talk-over ducking still pending (mixer side).
