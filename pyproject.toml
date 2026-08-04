@@ -1,0 +1,23 @@
+[project]
+name = "kalliope"
+version = "0.1.0"
+description = "A broadcast radio station for a personal music library, with an LLM DJ"
+readme = "README.md"
+authors = [
+    { name = "LuxiaSL", email = "mail.luxia@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.60",
+    "fastapi>=0.115",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+kalliope-server = "kalliope.server:main"
+
+[build-system]
+requires = ["uv_build>=0.9.2,<0.10.0"]
+build-backend = "uv_build"

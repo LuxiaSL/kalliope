@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kalliope</title>
+<style>
+  :root {
+    --bg: #14121a; --fg: #e8e2f0; --dim: #8f86a3; --accent: #d4a373;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f1ea; --fg: #2a2433; --dim: #7a7188; --accent: #a05e2b; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: var(--bg); color: var(--fg);
+    font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+  }
+  main { text-align: center; padding: 2rem; max-width: 34rem; }
+  h1 { font-weight: 400; letter-spacing: 0.35em; font-size: 1.1rem;
+       color: var(--dim); text-transform: lowercase; margin: 0 0 2.5rem; }
+  h1::before, h1::after { content: "─── "; letter-spacing: 0; }
+  h1::after { content: " ───"; }
+  #tune {
+    background: none; border: 1px solid var(--dim); color: var(--fg);
+    font: inherit; font-size: 1.15rem; padding: 0.9rem 2.6rem;
+    border-radius: 999px; cursor: pointer; transition: all 0.2s;
+  }
+  #tune:hover { border-color: var(--accent); color: var(--accent); }
+  #tune.on { border-color: var(--accent); color: var(--accent);
+             box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 30%, transparent); }
+  #np { margin-top: 2.5rem; min-height: 3.5rem; }
+  #np .title { font-size: 1.05rem; }
+  #np .artist { color: var(--dim); margin-top: 0.35rem; font-size: 0.9rem; }
+  #status { color: var(--dim); font-size: 0.75rem; margin-top: 2.5rem;
+            letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>kalliope</h1>
+  <button id="tune" aria-label="tune in">tune in</button>
+  <div id="np"><div class="title"></div><div class="artist"></div></div>
+  <div id="status">off</div>
+  <audio id="radio" preload="none"></audio>
+</main>
+<script>
+  const audio = document.getElementById("radio");
+  const tune = document.getElementById("tune");
+  const status = document.getElementById("status");
+  const npTitle = document.querySelector("#np .title");
+  const npArtist = document.querySelector("#np .artist");
+  let streamPath = null;
+  let tunedIn = false;
+
+  function streamUrl() {
+    // stream_path is ":port/mount" — same host as this page
+    return streamPath ? `${location.protocol}//${location.hostname}${streamPath}` : null;
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/now");
+      if (!r.ok) throw new Error(r.status);
+      const now = await r.json();
+      streamPath = now.stream_path;
+      if (now.track) {
+        npTitle.textContent = now.track.title || now.track.path;
+        npArtist.textContent = (now.track.artist || "").split("/")[0];
+      } else if (now.source_context === "break") {
+        npTitle.textContent = "· station break ·";
+        npArtist.textContent = "";
+      } else {
+        npTitle.textContent = "";
+        npArtist.textContent = "";
+      }
+      if (tunedIn) {
+        const n = now.listeners || 0;
+        status.textContent = n > 1 ? `on air · ${n} listening` : "on air";
+      }
+    } catch (e) {
+      status.textContent = tunedIn ? "signal lost — retrying" : "off";
+    }
+  }
+
+  function tuneIn() {
+    const url = streamUrl();
+    if (!url) { status.textContent = "no signal"; return; }
+    // cache-buster: the browser must never replay yesterday's radio
+    audio.src = `${url}?t=${Date.now()}`;
+    audio.play().then(() => {
+      tunedIn = true;
+      tune.textContent = "tune out";
+      tune.classList.add("on");
+      status.textContent = "on air";
+    }).catch(() => { status.textContent = "could not tune in"; });
+  }
+
+  function tuneOut(label) {
+    // a tuner, not a pause button: drop the connection entirely, so the
+    // next tune-in is a fresh connect at the live edge
+    tunedIn = false;
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    tune.textContent = "tune in";
+    tune.classList.remove("on");
+    status.textContent = label || "off";
+  }
+
+  tune.addEventListener("click", () => (tunedIn ? tuneOut() : tuneIn()));
+
+  // pauses from outside the button (media keys, bluetooth, lockscreen)
+  // must also be tune-outs — resuming a stale buffer is time travel
+  audio.addEventListener("pause", () => { if (tunedIn) tuneOut(); });
+  if ("mediaSession" in navigator) {
+    navigator.mediaSession.setActionHandler("play", tuneIn);
+    navigator.mediaSession.setActionHandler("pause", () => tuneOut());
+  }
+
+  // drift-snap: network stalls accumulate as behind-live buffer; if we've
+  // fallen more than ~8s behind the freshest data, jump back to the edge
+  setInterval(() => {
+    if (!tunedIn || !audio.buffered.length) return;
+    const edge = audio.buffered.end(audio.buffered.length - 1);
+    if (edge - audio.currentTime > 8) audio.currentTime = edge - 1.5;
+  }, 5000);
+
+  poll();
+  setInterval(poll, 5000);
+</script>
+</body>
+</html>
