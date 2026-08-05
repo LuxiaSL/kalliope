@@ -53,7 +53,7 @@ def main() -> int:
         stdout=subprocess.PIPE,
     )
     assert proc.stdout is not None
-    song, baseline = None, None
+    song, baseline, windows = None, None, 0
     print(f"{'time':8s}  {'rms':>7s}  {'Δsong':>6s}  playing", flush=True)
     try:
         while True:
@@ -66,8 +66,13 @@ def main() -> int:
             db = 20 * math.log10(rms) if rms > 0 else -96.0
             current = now_playing(args.api)
             if current != song:
-                song, baseline = current, db
-            delta = db - baseline
+                song, baseline, windows = current, None, 0
+            windows += 1
+            if windows == 3:
+                # baseline from the third window: the first two catch the
+                # crossfade, and a song's fade-in is not its level
+                baseline = db
+            delta = db - baseline if baseline is not None else 0.0
             flag = "  ← climbing" if delta >= args.alert else ""
             print(f"{time.strftime('%H:%M:%S')}  {db:6.1f}dB  {delta:+5.1f}  "
                   f"{current}{flag}", flush=True)
