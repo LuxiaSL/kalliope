@@ -57,6 +57,27 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_at ON events (at);
 
+-- Cal's long-term memory: the chronicle forest (chapters -> arcs), ported
+-- from heimdall's CSPN. Raw material = events; chronicle_meta tracks the
+-- fold high-water mark.
+CREATE TABLE IF NOT EXISTS chronicle (
+  id TEXT PRIMARY KEY,
+  level INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  source_ids TEXT NOT NULL DEFAULT '[]',
+  first_at TEXT,
+  last_at TEXT,
+  parent_id TEXT,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chronicle_level ON chronicle (level);
+
+CREATE TABLE IF NOT EXISTS chronicle_meta (
+  k TEXT PRIMARY KEY,
+  v TEXT
+);
+
 CREATE TABLE IF NOT EXISTS track_analysis (
   track_hash TEXT PRIMARY KEY,
   bpm REAL,
@@ -172,6 +193,74 @@ class RadioDB:
             log.exception("failed to read recent plays for state doc")
             return []
         return [dict(r) for r in rows]
+
+    # --- chronicle store (used by chronicle.Chronicle) --------------------
+
+    def get_meta(self, key: str) -> str | None:
+        try:
+            row = self._conn.execute(
+                "SELECT v FROM chronicle_meta WHERE k = ?", (key,)
+            ).fetchone()
+            return row["v"] if row else None
+        except sqlite3.Error:
+            log.exception("chronicle meta read failed")
+            return None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO chronicle_meta (k, v) VALUES (?, ?)",
+                (key, value),
+            )
+
+    def events_after(self, event_id: int, limit: int = 200) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT id, at, type, who, data FROM events WHERE id > ? "
+            "ORDER BY id ASC LIMIT ?",
+            (event_id, limit),
+        ).fetchall()
+
+    def plays_between(self, first_at: str, last_at: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT p.aired_at, t.artist, t.title FROM plays p "
+            "LEFT JOIN tracks t ON t.hash = p.track_hash "
+            "WHERE p.aired_at >= ? AND p.aired_at <= ? ORDER BY p.id",
+            (first_at, last_at),
+        ).fetchall()
+
+    def chronicle_add(
+        self, *, id_: str, level: int, content: str, source_ids: list,
+        first_at: str | None, last_at: str | None, tokens: int, created: str,
+    ) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO chronicle "
+                "(id, level, content, source_ids, first_at, last_at, "
+                " parent_id, tokens, created) VALUES (?,?,?,?,?,?,NULL,?,?)",
+                (id_, level, content, json.dumps(source_ids),
+                 first_at, last_at, tokens, created),
+            )
+
+    def chronicle_set_parent(self, child_id: str, parent_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE chronicle SET parent_id = ? WHERE id = ?",
+                (parent_id, child_id),
+            )
+
+    def chronicle_unmerged(self, level: int) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM chronicle WHERE level = ? AND parent_id IS NULL "
+            "ORDER BY created ASC",
+            (level,),
+        ).fetchall()
+
+    def chronicle_roots(self, limit: int | None = None) -> list[sqlite3.Row]:
+        q = ("SELECT * FROM chronicle WHERE parent_id IS NULL "
+             "ORDER BY level DESC, created DESC")
+        if limit:
+            q += f" LIMIT {int(limit)}"
+        return self._conn.execute(q).fetchall()
 
     def recently_aired_hashes(self, cutoff_iso: str) -> set[str]:
         try:

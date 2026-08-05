@@ -92,6 +92,7 @@ Everything is environment variables (or `.env`):
 | `KALLIOPE_ELEVENLABS_VOICE` | George | Any voice id from `GET /v1/voices` |
 | `KALLIOPE_ELEVENLABS_MODEL` | `eleven_flash_v2_5` | `eleven_multilingual_v2` for max quality at 2x credits |
 | `KALLIOPE_PIPER_VOICE` | `…/voices/en_US-lessac-medium.onnx` | Local/fallback TTS voice model |
+| `KALLIOPE_SHOW_OPEN_QUIET_MIN` | `45` | Tune-in after this many empty minutes earns a show open; `0` disables |
 | `KALLIOPE_ENRICH_HOURS` | `6` | Station self-runs `enrich.sh` this often; `0` disables |
 | `KALLIOPE_TALKOVER_ENABLED` | `true` | Breaks ride long intros when the analyzed window fits |
 | `KALLIOPE_TALKOVER_MARGIN_S` | `3.5` | Entry + release slack a talk-over needs inside the intro |
@@ -130,8 +131,10 @@ backfill (MusicBrainz + inference via `scripts/genres.py`) feeding the DJ's
 catalog tools and the player display, ElevenLabs voice with piper fallback,
 talk-over breaks (the DJ's voice rides a long instrumental intro, music
 ducked underneath, released before the song proper — only when the analyzed
-intro window fits), web player. Planned, per [`SPEC.md`](SPEC.md): the
-request line ("call in"), show-open bits when someone tunes in, Android
-client.
+intro window fits), show opens (first tune-in after a quiet stretch wakes
+the DJ), long-term memory (the session log periodically folds into
+first-person "chapters" and "arcs" the DJ carries into every break — months
+of broadcast compact into character), web player. Planned, per
+[`SPEC.md`](SPEC.md): the request line ("call in"), Android client.
 
 Runs on a laptop. Meant to feel less like an app and more like a place.

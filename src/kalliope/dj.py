@@ -97,6 +97,8 @@ def build_state_doc(
     recent_breaks: list[str],
     upcoming: Track | None,
     catalog_counts: dict[str, int],
+    story: str = "",
+    occasion: str | None = None,
 ) -> str:
     """The rolling station state doc (SPEC §1.3), assembled per call."""
     now = datetime.now()
@@ -105,6 +107,14 @@ def build_state_doc(
         "It airs minutes from now — tape delay rules apply.",
         f"Tuned in as you write (may well change by airtime): {len(listeners)}"
         + (f" (since: {', '.join(sorted(listeners.values()))})" if listeners else ""),
+    ]
+    if story:
+        lines += [
+            "",
+            "The story so far — your own memories of this station, oldest first:",
+            story,
+        ]
+    lines += [
         "",
         "Recently aired (newest first):",
     ]
@@ -125,9 +135,10 @@ def build_state_doc(
         "",
         f"Library: {catalog_counts.get('library', 0)} tracks settled, "
         f"{catalog_counts.get('pool', 0)} in the fresh pool.",
-        "",
-        "Write your next break.",
     ]
+    if occasion:
+        lines += ["", f"The occasion: {occasion}"]
+    lines += ["", "Write your next break."]
     return "\n".join(lines)
 
 
@@ -185,6 +196,56 @@ class DJ:
             getattr(response.usage, "cache_read_input_tokens", "?"),
         )
         return parsed
+
+    def write_memory(self, material: str, prior: str = "", kind: str = "chapter") -> str:
+        """Cal forms a lasting first-person memory of a stretch of broadcast
+        (the chronicle fold — CSPN pattern). Returns "" on any failure so
+        the chronicle can retry later; never raises into the caller."""
+        if self._client is None or self._persona is None:
+            return ""
+        label = "stretch of the station's life" if kind == "chapter" else (
+            "longer arc of the station's life, told through your own earlier memories"
+        )
+        prior_block = (
+            f"MEMORIES YOU'VE ALREADY FORMED (your own, oldest first):\n{prior}\n\n"
+            if prior else ""
+        )
+        prompt = (
+            f"{prior_block}"
+            f"You are forming a lasting MEMORY of this {label} — as it happened, "
+            "with no knowledge of what came after. First person, past tense. "
+            "Keep concrete details worth keeping: what you played and said, who "
+            "came and went, anything that felt like it might become a running "
+            "thread. Three to five sentences, in your own voice. This is for "
+            "your log, not for air — no sign-offs, no station identification.\n\n"
+            f"WHAT TO REMEMBER:\n{material}"
+        )
+        try:
+            response = self._client.messages.create(
+                model=self._settings.dj_model,
+                max_tokens=800,
+                system=[
+                    {
+                        "type": "text",
+                        "text": self._persona,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.APIError:
+            log.exception("memory-forming call failed — chronicle will retry")
+            return ""
+        text = "".join(
+            b.text for b in response.content if getattr(b, "type", "") == "text"
+        ).strip()
+        if response.stop_reason == "max_tokens" and "." in text:
+            # never store a memory that trails off mid-sentence
+            text = text[: text.rfind(".") + 1]
+            log.warning("memory hit the token cap — trimmed to last sentence")
+        if text:
+            log.info("memory formed (%s, %d chars)", kind, len(text))
+        return text
 
     def plan_set(self, state_doc: str, catalog: Catalog) -> PlannedSet:
         """Let the DJ browse the catalog with tools and program the next set.

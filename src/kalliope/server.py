@@ -26,6 +26,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .catalog import Catalog
+from .chronicle import Chronicle
 from .config import Settings, load_settings
 from .dj import DJ, build_state_doc
 from .models import AiredEvent, NowPlaying, StationEvent, Track, now_iso
@@ -41,6 +42,7 @@ class BreakItem:
     wav: Path
     transcript: str
     duration: float
+    mode: str = "standalone"   # standalone | show_open (talkovers never deck)
 
 
 class Station:
@@ -50,9 +52,13 @@ class Station:
         self.radio_db = RadioDB(settings.catalog_db)
         self.picker = Picker(self.catalog, self.radio_db, settings.no_repeat_hours)
         self.dj = DJ(settings)
+        self.chronicle = Chronicle(self.radio_db, self.dj.write_memory)
         self.now_playing = NowPlaying(station=settings.station_name)
         # who -> tuned-in-since; keyed by harbor's client ip (tokens later)
         self.listeners: dict[str, str] = {}
+        # when the room last emptied (monotonic); a tune-in after a long
+        # enough quiet stretch earns a show-open break (SPEC §3)
+        self.empty_since: float | None = time.monotonic()
         # --- the deck (SPEC §1.3: everything is lookahead) -----------------
         # DJ-planned queue of tracks and breaks; the shuffle picker only
         # plays when the deck runs dry (dead-air fallback, SPEC §1.2)
@@ -66,10 +72,25 @@ class Station:
         # timing diagnostics: what's on air and how long it should run
         self._on_air: tuple[str, float | None, float] | None = None  # label, expected_s, monotonic
 
-    def tune_in(self, who: str) -> None:
+    def tune_in(self, who: str) -> bool:
+        """Record the arrival. Returns True when it should wake the DJ for
+        a show open: first company after a long quiet stretch."""
+        was_empty = not self.listeners
         self.listeners[who] = now_iso()
         self.radio_db.record_event("tune_in", who=who)
         log.info("tune in: %s (%d listening)", who, len(self.listeners))
+        quiet_s = self.settings.show_open_quiet_min * 60
+        due = (
+            was_empty
+            and quiet_s > 0
+            and self.empty_since is not None
+            and time.monotonic() - self.empty_since >= quiet_s
+            and self.dj.on_shift
+            and not self.break_busy
+        )
+        if was_empty:
+            self.empty_since = None
+        return due
 
     def tune_out(self, who: str) -> None:
         # harbor's disconnect id may be 'ip' or 'ip:port'; match loosely
@@ -79,6 +100,8 @@ class Station:
         )
         if key is not None:
             del self.listeners[key]
+        if not self.listeners:
+            self.empty_since = time.monotonic()
         self.radio_db.record_event("tune_out", who=who)
         log.info("tune out: %s (%d listening)", who, len(self.listeners))
 
@@ -139,7 +162,7 @@ class Station:
         music_left = sum(1 for i in self.deck if not isinstance(i, BreakItem))
         return self.dj.on_shift and not self.planning and music_left <= 1
 
-    def _state_doc(self) -> str:
+    def _state_doc(self, occasion: str | None = None) -> str:
         recent_breaks = [
             str((e.get("data") or {}).get("transcript", ""))
             for e in self.radio_db.recent_events(limit=30)
@@ -151,6 +174,8 @@ class Station:
             recent_breaks=[b for b in recent_breaks if b],
             upcoming=None,
             catalog_counts=self.catalog.counts_by_root(),
+            story=self.chronicle.story_so_far(),
+            occasion=occasion,
         )
 
     def plan_more(self) -> None:
@@ -183,6 +208,9 @@ class Station:
                 self.radio_db.record_event("dj_note", data={"note": plan.note})
             self.deck.extend(items)  # publish last: /next may fire any moment
             log.info("deck now holds %d items", len(self.deck))
+            # memory upkeep rides the planning cadence: deck is published,
+            # we're already in a worker thread, and failures are swallowed
+            self.chronicle.maintain()
         except Exception:
             log.exception("set planning failed — shuffle covers this stretch")
         finally:
@@ -231,16 +259,18 @@ class Station:
             self.catalog.intro_len(track.hash) or 0.0,
         )
 
-    def make_break(self) -> None:
-        """Standalone forced break → front of the deck (airs in ~2 tracks).
+    def make_break(self, occasion: str | None = None, mode: str = "standalone") -> None:
+        """Standalone break → front of the deck (airs in ~2 tracks).
         Worker thread; failures logged and swallowed."""
         try:
-            result = self.dj.write_break(self._state_doc())
+            result = self.dj.write_break(self._state_doc(occasion))
             audio = render_break(result.script, self.settings)
             if result.note:
                 self.radio_db.record_event("dj_note", data={"note": result.note})
-            self.deck.appendleft(BreakItem(audio.path, result.script, audio.duration))
-            log.info("break ready: %r", result.script[:80])
+            self.deck.appendleft(
+                BreakItem(audio.path, result.script, audio.duration, mode)
+            )
+            log.info("break ready (%s): %r", mode, result.script[:80])
         except Exception:
             log.exception("break generation failed — music continues")
         finally:
@@ -333,7 +363,8 @@ def build_app(settings: Settings) -> FastAPI:
         brk = station.breaks_out.pop(event.filename, None)
         if brk is not None:
             station.radio_db.record_event(
-                "break_aired", data={"transcript": brk.transcript}
+                "break_aired",
+                data={"transcript": brk.transcript, "mode": brk.mode},
             )
             show_later(NowPlaying(
                 station=station.settings.station_name,
@@ -371,10 +402,22 @@ def build_app(settings: Settings) -> FastAPI:
         return JSONResponse({"recorded": track.hash is not None})
 
     @app.post("/event")
-    def event(evt: StationEvent, request: Request) -> JSONResponse:
+    async def event(evt: StationEvent, request: Request) -> JSONResponse:
         station: Station = request.app.state.station
         if evt.type == "tune_in" and evt.who:
-            station.tune_in(evt.who)
+            if station.tune_in(evt.who):
+                # first company after a long quiet stretch — wake the DJ
+                # for a show open (airs in ~2 tracks, tape delay and all)
+                station.break_busy = True
+                log.info("show open: waking the DJ (someone's here)")
+                asyncio.create_task(asyncio.to_thread(
+                    station.make_break,
+                    "Someone just tuned in — the first company after a long "
+                    "quiet stretch. Open the show. This airs a few minutes "
+                    "from now; they'll probably still be there, but write so "
+                    "it survives if they aren't.",
+                    "show_open",
+                ))
         elif evt.type == "tune_out" and evt.who:
             station.tune_out(evt.who)
         else:

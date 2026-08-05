@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # break cadence, unheard-break odds, and set length live in the planning
     # brief (dj.PLANNING_BRIEF) — they're editorial judgment, not config
 
+    # --- show opens -------------------------------------------------------
+    # a tune-in after at least this many minutes of empty listenership wakes
+    # the DJ for a show-open break; 0 disables
+    show_open_quiet_min: float = 45.0
+
     # --- catalog enrichment -----------------------------------------------
     # the always-on station tends its own catalog: every N hours it runs
     # station/enrich.sh (analyzer + genres, both incremental) as a nice'd
