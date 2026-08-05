@@ -110,6 +110,17 @@ class Station:
     # the deck airs at least one track later than "now". Planned sets don't
     # care (they're computed ahead in order); forced breaks land in ~2 tracks.
 
+    def _track_uri(self, track: Track) -> str:
+        """A track's playable URI, with one static leveling gain from its
+        measured loudness (constant through the song — dynamics survive).
+        Unanalyzed tracks play as mastered; the next enrich pass covers them."""
+        lufs = self.catalog.loudness(track.hash)
+        if lufs is None:
+            return str(track.abs_path)
+        gain_db = max(-12.0, min(9.0, self.settings.target_lufs - lufs))
+        mult = round(10 ** (gain_db / 20), 3)
+        return f"annotate:liq_amplify={mult}:{track.abs_path}"
+
     def next_uri(self) -> str | None:
         uri: str | None = None
         if self.deck:
@@ -127,13 +138,13 @@ class Station:
             else:
                 log.info("handing out (deck): %s — %s",
                          item.display_artist, item.display_title)
-                uri = str(item.abs_path)
+                uri = self._track_uri(item)
         else:
             track = self.picker.next_track()
             if track is not None:
                 log.info("handing out (shuffle fallback): %s — %s",
                          track.display_artist, track.display_title)
-                uri = str(track.abs_path)
+                uri = self._track_uri(track)
         return uri
 
     def log_transition(self, incoming: str) -> None:

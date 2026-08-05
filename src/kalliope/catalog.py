@@ -157,6 +157,19 @@ class Catalog:
         ).fetchall()
         return {row["genre"]: int(row["n"]) for row in rows}
 
+    def loudness(self, track_hash: str | None) -> float | None:
+        """Measured integrated loudness (LUFS) for one track, if analyzed."""
+        if not track_hash:
+            return None
+        row = self._conn.execute(
+            "SELECT loudness_lufs FROM track_analysis WHERE track_hash = ?",
+            (track_hash,),
+        ).fetchone()
+        return (
+            float(row["loudness_lufs"])
+            if row and row["loudness_lufs"] is not None else None
+        )
+
     def intro_len(self, track_hash: str | None) -> float | None:
         """Measured quiet-intro length for one track, if analyzed."""
         if not track_hash:

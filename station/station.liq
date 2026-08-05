@@ -45,9 +45,12 @@ end
 radio.on_track(synchronous=false, notify_aired)
 
 # --- sound ----------------------------------------------------------------
-# v1 loudness handling: gain-rider normalization as the NULL-safe fallback
-# until track_analysis.loudness_lufs exists (SPEC §1.2)
-radio = normalize(radio)
+# Loudness (SPEC §1.2): one static per-track gain, set by the server from
+# measured LUFS via liq_amplify annotations. The old normalize() gain rider
+# is gone deliberately — it crept quiet passages louder mid-song (AGC
+# pumping), which this library's dynamics made audible. A track without
+# analysis plays as mastered (multiplier 1).
+radio = amplify(override="liq_amplify", 1., radio)
 radio = crossfade(fade_in=1., fade_out=2., duration=3., radio)
 
 # --- the voice: talk-over breaks (SPEC §1.2) -------------------------------

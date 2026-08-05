@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # where liquidsoap writes HLS segments; served by us at /hls/
     hls_dir: Path = Path.home() / ".local/state/kalliope/hls"
 
+    # loudness leveling: each analyzed track gets one static gain toward
+    # this target (ReplayGain-style, from track_analysis.loudness_lufs) —
+    # constant through the song, so dynamics stay dynamics. Replaces the
+    # old runtime gain rider, which slowly cranked quiet passages louder.
+    target_lufs: float = -14.0
+
     # listeners hear the stream ~this many seconds after the mixer plays it
     # (harbor burst buffer); the now-playing display waits to match their ears
     display_latency_s: float = 2.7
