@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # liquidsoap's harbor output (native mp3 stream for <audio>)
     harbor_port: int = 8322
 
+    # what the player is told to tune to. Default: same host, harbor port.
+    # Behind a reverse proxy (VPS: Caddy terminating TLS), set to a
+    # same-origin path like "/stream" and proxy it to the harbor.
+    stream_public: str | None = None
+
     # where liquidsoap writes HLS segments; served by us at /hls/
     hls_dir: Path = Path.home() / ".local/state/kalliope/hls"
 

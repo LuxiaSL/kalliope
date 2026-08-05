@@ -448,7 +448,9 @@ def build_app(settings: Settings) -> FastAPI:
     def now(request: Request) -> JSONResponse:
         station: Station = request.app.state.station
         payload = station.now_playing.model_dump(mode="json")
-        payload["stream_path"] = f":{settings.harbor_port}/stream"
+        payload["stream_path"] = (
+            settings.stream_public or f":{settings.harbor_port}/stream"
+        )
         payload["listeners"] = len(station.listeners)
         track = station.now_playing.track
         payload["genres"] = (

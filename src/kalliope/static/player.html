@@ -62,8 +62,12 @@
   let tunedIn = false;
 
   function streamUrl() {
-    // stream_path is ":port/mount" — same host as this page
-    return streamPath ? `${location.protocol}//${location.hostname}${streamPath}` : null;
+    // ":port/mount" = same host, harbor port (home setup);
+    // "/mount" = same origin, reverse-proxied (VPS behind TLS)
+    if (!streamPath) return null;
+    return streamPath.startsWith(":")
+      ? `${location.protocol}//${location.hostname}${streamPath}`
+      : streamPath;
   }
 
   async function poll() {

@@ -7,6 +7,9 @@ settings.log.level := 3
 api = environment.get("KALLIOPE_API", default="http://127.0.0.1:8321")
 hls_dir = environment.get("KALLIOPE_HLS_DIR", default="#{environment.get('HOME')}/.local/state/kalliope/hls")
 harbor_port = int_of_string(environment.get("KALLIOPE_HARBOR_PORT", default="8322"))
+# bind 127.0.0.1 when a reverse proxy fronts the stream (VPS) — keeps the
+# raw harbor (and the /voice push endpoint) off the public interface
+settings.harbor.bind_addrs := [environment.get("KALLIOPE_HARBOR_BIND", default="0.0.0.0")]
 
 # --- next track from the picker -------------------------------------------
 def next_track() =
