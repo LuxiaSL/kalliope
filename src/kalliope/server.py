@@ -198,7 +198,7 @@ class Station:
         music_left = sum(1 for i in self.deck if not isinstance(i, BreakItem))
         return self.dj_active() and not self.planning and music_left <= 1
 
-    def _state_doc(self, occasion: str | None = None) -> str:
+    def _state_doc(self, occasion: str | None = None, ask: str = "break") -> str:
         recent_breaks = [
             str((e.get("data") or {}).get("transcript", ""))
             for e in self.radio_db.recent_events(limit=30)
@@ -212,13 +212,14 @@ class Station:
             catalog_counts=self.catalog.counts_by_root(),
             story=self.chronicle.story_so_far(),
             occasion=occasion,
+            ask=ask,
         )
 
     def plan_more(self) -> None:
         """One DJ planning pass → deck grows by a set. Worker thread; any
         failure is logged and swallowed — shuffle fallback covers the gap."""
         try:
-            plan = self.dj.plan_set(self._state_doc(), self.catalog)
+            plan = self.dj.plan_set(self._state_doc(ask="plan"), self.catalog)
             items: list[Track | BreakItem] = list(plan.tracks)
             if plan.break_after is not None and plan.break_script:
                 audio = render_break(plan.break_script, self.settings)

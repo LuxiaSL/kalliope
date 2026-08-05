@@ -99,6 +99,7 @@ def build_state_doc(
     catalog_counts: dict[str, int],
     story: str = "",
     occasion: str | None = None,
+    ask: str = "break",
 ) -> str:
     """The rolling station state doc (SPEC §1.3), assembled per call."""
     now = datetime.now()
@@ -138,7 +139,13 @@ def build_state_doc(
     ]
     if occasion:
         lines += ["", f"The occasion: {occasion}"]
-    lines += ["", "Write your next break."]
+    # the closing instruction must match the call: a literal-minded model
+    # handed "write your next break" will write a break instead of planning
+    if ask == "plan":
+        lines += ["", "Set the decks: browse with your tools, then commit "
+                      "the next set with set_the_decks."]
+    else:
+        lines += ["", "Write your next break."]
     return "\n".join(lines)
 
 
@@ -377,10 +384,15 @@ class DJ:
                        genre_search, genre_map, set_the_decks],
             )
             usage_in = usage_out = 0
+            last_text = ""
             for i, message in enumerate(runner):
                 self._meter("plan", message.usage)
                 usage_in += message.usage.input_tokens
                 usage_out += message.usage.output_tokens
+                last_text = "".join(
+                    b.text for b in message.content
+                    if getattr(b, "type", "") == "text"
+                )
                 if message.stop_reason == "refusal":
                     raise DJError("model declined to plan")
                 if "plan" in committed or i >= 10:
@@ -389,7 +401,12 @@ class DJ:
             raise DJError(f"planning call failed: {e}") from e
         plan = committed.get("plan")
         if plan is None:
-            raise DJError("planner finished without setting the decks")
+            # keep what the model said instead — the difference between a
+            # mystery and a prompt bug
+            raise DJError(
+                "planner finished without setting the decks; it said: "
+                f"{last_text[:300]!r}"
+            )
         log.info(
             "decks set: %d tracks, break %s (%d in / %d out tokens)",
             len(plan.tracks),
