@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -245,6 +246,26 @@ class Station:
         finally:
             self.break_busy = False
 
+    def run_enrichment(self) -> None:
+        """One pass of station/enrich.sh (analyzer + genres, incremental).
+        Worker thread; the station must never notice a failed pass."""
+        script = self.settings.persona_path.parent / "enrich.sh"
+        log_path = Path.home() / ".local/state/kalliope/enrich.log"
+        try:
+            with open(log_path, "w") as out:
+                proc = subprocess.run(
+                    [str(script)], stdout=out, stderr=subprocess.STDOUT,
+                    timeout=3 * 3600,
+                )
+            tail = ""
+            try:
+                tail = log_path.read_text()[-500:].strip().splitlines()[-1]
+            except (OSError, IndexError):
+                pass
+            log.info("enrichment pass done (exit %d): %s", proc.returncode, tail)
+        except (subprocess.TimeoutExpired, OSError):
+            log.exception("enrichment pass failed — catalog stays as-is")
+
     def close(self) -> None:
         self.catalog.close()
         self.radio_db.close()
@@ -260,9 +281,24 @@ def build_app(settings: Settings) -> FastAPI:
             station.catalog.track_count(),
             settings.hls_dir,
         )
+
+        async def enrich_loop() -> None:
+            # first pass shortly after startup (let the stream settle),
+            # then every enrich_hours; single-flight by construction
+            await asyncio.sleep(600)
+            while True:
+                await asyncio.to_thread(station.run_enrichment)
+                await asyncio.sleep(settings.enrich_hours * 3600)
+
+        enricher = (
+            asyncio.create_task(enrich_loop())
+            if settings.enrich_hours > 0 else None
+        )
         try:
             yield
         finally:
+            if enricher is not None:
+                enricher.cancel()
             station.close()
 
     app = FastAPI(title="kalliope", lifespan=lifespan)

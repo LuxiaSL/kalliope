@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # break cadence, unheard-break odds, and set length live in the planning
     # brief (dj.PLANNING_BRIEF) — they're editorial judgment, not config
 
+    # --- catalog enrichment -----------------------------------------------
+    # the always-on station tends its own catalog: every N hours it runs
+    # station/enrich.sh (analyzer + genres, both incremental) as a nice'd
+    # subprocess. 0 disables; the command works standalone regardless.
+    enrich_hours: float = 6.0
+
     # --- talk-over breaks (SPEC §1.2) -------------------------------------
     # a break rides over the next track's intro (ducked) when the measured
     # intro window fits the break plus this margin: ~2s of entry latency

@@ -65,8 +65,10 @@ echo 'ELEVENLABS_API_KEY="..."' >> .env
 
 # 6. (optional, anytime) enrich the catalog — the DJ sequences better with
 #    measured tempo/energy and genre labels in its tool results
-uv run scripts/analyze.py     # bpm / energy / intro / outro / LUFS per track
-uv run scripts/genres.py      # genres via MusicBrainz + Claude inference
+./station/enrich.sh           # analyzer + genres, incremental; symlink it
+                              # somewhere on PATH if you like. The running
+                              # station also fires this every 6h on its own
+                              # (KALLIOPE_ENRICH_HOURS, 0 to disable)
 ```
 
 Player at **http://127.0.0.1:8321/** — one big tune-in button, now-playing,
@@ -90,6 +92,7 @@ Everything is environment variables (or `.env`):
 | `KALLIOPE_ELEVENLABS_VOICE` | George | Any voice id from `GET /v1/voices` |
 | `KALLIOPE_ELEVENLABS_MODEL` | `eleven_flash_v2_5` | `eleven_multilingual_v2` for max quality at 2x credits |
 | `KALLIOPE_PIPER_VOICE` | `…/voices/en_US-lessac-medium.onnx` | Local/fallback TTS voice model |
+| `KALLIOPE_ENRICH_HOURS` | `6` | Station self-runs `enrich.sh` this often; `0` disables |
 | `KALLIOPE_TALKOVER_ENABLED` | `true` | Breaks ride long intros when the analyzed window fits |
 | `KALLIOPE_TALKOVER_MARGIN_S` | `3.5` | Entry + release slack a talk-over needs inside the intro |
 | `KALLIOPE_DUCK` | `0.2` | Music level under a talk-over voice (0.2 ≈ −14dB) |
