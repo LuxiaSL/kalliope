@@ -92,6 +92,9 @@ Everything is environment variables (or `.env`):
 | `KALLIOPE_ELEVENLABS_VOICE` | George | Any voice id from `GET /v1/voices` |
 | `KALLIOPE_ELEVENLABS_MODEL` | `eleven_flash_v2_5` | `eleven_multilingual_v2` for max quality at 2x credits |
 | `KALLIOPE_PIPER_VOICE` | `…/voices/en_US-lessac-medium.onnx` | Local/fallback TTS voice model |
+| `KALLIOPE_POWER_DEFAULT` | `dj` | `auto` = DJ works only while someone listens (tune-in wakes it); `music` = no API at all |
+| `KALLIOPE_LISTENER_LINGER_MIN` | `30` | `auto` keeps the DJ on this long after the room empties |
+| `KALLIOPE_ADMIN_TOKEN` | — | Enables `/admin` (power lever page + API); unset = disabled |
 | `KALLIOPE_SHOW_OPEN_QUIET_MIN` | `45` | Tune-in after this many empty minutes earns a show open; `0` disables |
 | `KALLIOPE_ENRICH_HOURS` | `6` | Station self-runs `enrich.sh` this often; `0` disables |
 | `KALLIOPE_TALKOVER_ENABLED` | `true` | Breaks ride long intros when the analyzed window fits |

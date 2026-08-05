@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     # break cadence, unheard-break odds, and set length live in the planning
     # brief (dj.PLANNING_BRIEF) — they're editorial judgment, not config
 
+    # --- power / admin ----------------------------------------------------
+    # "dj"    Cal always programs (spends API money into empty rooms)
+    # "auto"  Cal works only while someone's tuned in, plus a linger window;
+    #         idle hours are API-free shuffle — the tuner is the on-switch
+    # "music" never call an API — pure shuffle transmitter
+    # Runtime changes via POST /admin/power persist across restarts and win
+    # over this default.
+    power_default: Literal["dj", "auto", "music"] = "dj"
+    listener_linger_min: float = 30.0
+    # shared secret for /admin endpoints; unset = admin API disabled
+    admin_token: str | None = None
+
     # --- show opens -------------------------------------------------------
     # a tune-in after at least this many minutes of empty listenership wakes
     # the DJ for a show-open break; 0 disables

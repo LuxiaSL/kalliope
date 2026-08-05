@@ -59,6 +59,10 @@ class Station:
         # when the room last emptied (monotonic); a tune-in after a long
         # enough quiet stretch earns a show-open break (SPEC §3)
         self.empty_since: float | None = time.monotonic()
+        # power mode: runtime state wins over the configured default
+        self.power: str = (
+            self.radio_db.get_meta("power_mode") or settings.power_default
+        )
         # --- the deck (SPEC §1.3: everything is lookahead) -----------------
         # DJ-planned queue of tracks and breaks; the shuffle picker only
         # plays when the deck runs dry (dead-air fallback, SPEC §1.2)
@@ -169,9 +173,29 @@ class Station:
                      if track else Path(incoming).name)
             self._on_air = (label, track.duration if track else None, now)
 
+    def set_power(self, mode: str) -> None:
+        self.power = mode
+        self.radio_db.set_meta("power_mode", mode)
+        self.radio_db.record_event("admin", data={"power": mode})
+        log.info("power mode: %s", mode)
+
+    def dj_active(self) -> bool:
+        """Is Cal on the clock right now? (Money is only spent when yes.)"""
+        if not self.dj.on_shift or self.power == "music":
+            return False
+        if self.power == "auto":
+            if self.listeners:
+                return True
+            linger = self.settings.listener_linger_min * 60
+            return (
+                self.empty_since is not None
+                and time.monotonic() - self.empty_since < linger
+            )
+        return True
+
     def deck_running_low(self) -> bool:
         music_left = sum(1 for i in self.deck if not isinstance(i, BreakItem))
-        return self.dj.on_shift and not self.planning and music_left <= 1
+        return self.dj_active() and not self.planning and music_left <= 1
 
     def _state_doc(self, occasion: str | None = None) -> str:
         recent_breaks = [
@@ -429,11 +453,62 @@ def build_app(settings: Settings) -> FastAPI:
                     "it survives if they aren't.",
                     "show_open",
                 ))
+            if station.deck_running_low():
+                # auto mode wakes on company: the deck drained while Cal
+                # was off the clock; someone's here now, so plan
+                station.planning = True
+                asyncio.create_task(asyncio.to_thread(station.plan_more))
         elif evt.type == "tune_out" and evt.who:
             station.tune_out(evt.who)
         else:
             station.radio_db.record_event(evt.type, who=evt.who, data=evt.data)
         return JSONResponse({"ok": True})
+
+    # --- admin: the power lever (token-gated; unset token = disabled) ------
+
+    def _admin_ok(request: Request) -> bool:
+        token = settings.admin_token
+        provided = request.headers.get("x-admin-token") or request.query_params.get(
+            "token"
+        )
+        return bool(token) and provided == token
+
+    @app.get("/admin/status")
+    def admin_status(request: Request) -> JSONResponse:
+        station: Station = request.app.state.station
+        if not _admin_ok(request):
+            return JSONResponse({"ok": False, "reason": "bad or missing token"}, 403)
+        return JSONResponse({
+            "power": station.power,
+            "dj_on_the_clock": station.dj_active(),
+            "listeners": len(station.listeners),
+            "deck": len(station.deck),
+            "planning": station.planning,
+        })
+
+    @app.post("/admin/power")
+    async def admin_power(request: Request) -> JSONResponse:
+        station: Station = request.app.state.station
+        if not _admin_ok(request):
+            return JSONResponse({"ok": False, "reason": "bad or missing token"}, 403)
+        try:
+            body = await request.json()
+            mode = str(body.get("mode", ""))
+        except Exception:
+            mode = ""
+        if mode not in ("dj", "auto", "music"):
+            return JSONResponse(
+                {"ok": False, "reason": "mode must be dj | auto | music"}, 422
+            )
+        station.set_power(mode)
+        return JSONResponse({"ok": True, "power": mode})
+
+    @app.get("/admin", response_class=HTMLResponse)
+    def admin_page() -> HTMLResponse:
+        html = (
+            resources.files("kalliope").joinpath("static/admin.html").read_text()
+        )
+        return HTMLResponse(html)
 
     @app.get("/events")
     def events(request: Request, limit: int = 50) -> JSONResponse:
@@ -446,6 +521,11 @@ def build_app(settings: Settings) -> FastAPI:
         station: Station = request.app.state.station
         if not station.dj.on_shift:
             return JSONResponse({"ok": False, "reason": "DJ not on shift"}, 503)
+        if not station.dj_active():
+            return JSONResponse(
+                {"ok": False, "reason": f"DJ off the clock (power={station.power})"},
+                503,
+            )
         queued = any(isinstance(i, BreakItem) for i in station.deck)
         if station.break_busy or queued:
             return JSONResponse({"ok": False, "reason": "break already in flight"}, 409)
