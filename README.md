@@ -90,6 +90,10 @@ Everything is environment variables (or `.env`):
 | `KALLIOPE_ELEVENLABS_VOICE` | George | Any voice id from `GET /v1/voices` |
 | `KALLIOPE_ELEVENLABS_MODEL` | `eleven_flash_v2_5` | `eleven_multilingual_v2` for max quality at 2x credits |
 | `KALLIOPE_PIPER_VOICE` | `…/voices/en_US-lessac-medium.onnx` | Local/fallback TTS voice model |
+| `KALLIOPE_TALKOVER_ENABLED` | `true` | Breaks ride long intros when the analyzed window fits |
+| `KALLIOPE_TALKOVER_MARGIN_S` | `3.5` | Entry + release slack a talk-over needs inside the intro |
+| `KALLIOPE_DUCK` | `0.2` | Music level under a talk-over voice (0.2 ≈ −14dB) |
+| `KALLIOPE_VOICE_GAIN` | `1.0` | Talk-over voice trim, by ear |
 | `KALLIOPE_PATINA` | `0.002` | Static bed gain; `0` for a clean signal |
 | `KALLIOPE_WARMTH` | `on` | Gentle bandpass; `off` to disable |
 | `KALLIOPE_AUTO_UPDATE` | `on` | `run.sh` fast-forwards to origin/main on start (stashes local edits, never blocks startup); `off` for development checkouts |
@@ -121,7 +125,10 @@ listener presence (tune-ins are events the DJ can see), play history, audio
 analysis (BPM/energy/intro/outro/LUFS via `scripts/analyze.py`), genre
 backfill (MusicBrainz + inference via `scripts/genres.py`) feeding the DJ's
 catalog tools and the player display, ElevenLabs voice with piper fallback,
-web player. Planned, per [`SPEC.md`](SPEC.md): the request line ("call in"),
-show-open bits when someone tunes in, talk-over-intro ducking, Android client.
+talk-over breaks (the DJ's voice rides a long instrumental intro, music
+ducked underneath, released before the song proper — only when the analyzed
+intro window fits), web player. Planned, per [`SPEC.md`](SPEC.md): the
+request line ("call in"), show-open bits when someone tunes in, Android
+client.
 
 Runs on a laptop. Meant to feel less like an app and more like a place.

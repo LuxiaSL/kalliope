@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # break cadence, unheard-break odds, and set length live in the planning
     # brief (dj.PLANNING_BRIEF) — they're editorial judgment, not config
 
+    # --- talk-over breaks (SPEC §1.2) -------------------------------------
+    # a break rides over the next track's intro (ducked) when the measured
+    # intro window fits the break plus this margin: ~2s of entry latency
+    # (crossfade + push) and ~1.5s of release before the song proper
+    talkover_enabled: bool = True
+    talkover_margin_s: float = 3.5
+
     # --- TTS --------------------------------------------------------------
     # "auto" = ElevenLabs when a key is present, Piper otherwise; either way
     # a failed render falls through to Piper (the break must not die for a

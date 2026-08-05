@@ -70,7 +70,7 @@ class Catalog:
     _BROWSE_COLS = (
         "t.id, t.root, t.artist, t.title, t.album, t.year, t.duration, "
         "COUNT(p.id) AS spins, MAX(p.aired_at) AS last_aired, "
-        "a.bpm, a.energy, "
+        "a.bpm, a.energy, a.intro_len, "
         "(SELECT GROUP_CONCAT(DISTINCT g.genre) FROM genres g "
         " WHERE g.track_hash = t.hash) AS genres"
     )
@@ -102,6 +102,9 @@ class Catalog:
             out["bpm"] = round(row["bpm"])
         if row["energy"] is not None:
             out["energy"] = row["energy"]
+        # surfaced only when long enough to matter: a break can ride this
+        if row["intro_len"] is not None and row["intro_len"] >= 8:
+            out["intro_s"] = round(row["intro_len"])
         return out
 
     def search(self, query: str, limit: int = 25) -> list[dict[str, object]]:
@@ -153,6 +156,16 @@ class Catalog:
             (limit,),
         ).fetchall()
         return {row["genre"]: int(row["n"]) for row in rows}
+
+    def intro_len(self, track_hash: str | None) -> float | None:
+        """Measured quiet-intro length for one track, if analyzed."""
+        if not track_hash:
+            return None
+        row = self._conn.execute(
+            "SELECT intro_len FROM track_analysis WHERE track_hash = ?",
+            (track_hash,),
+        ).fetchone()
+        return float(row["intro_len"]) if row and row["intro_len"] is not None else None
 
     def genres_for(self, track_hash: str | None) -> list[str]:
         if not track_hash:

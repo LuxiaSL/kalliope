@@ -18,6 +18,7 @@ from importlib import resources
 from pathlib import Path
 from typing import AsyncIterator
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
@@ -58,6 +59,9 @@ class Station:
         self.planning = False
         self.breaks_out: dict[str, BreakItem] = {}   # wav path -> handed-out break
         self.break_busy = False                       # manual /dj/break guard
+        # talk-overs: track abs_path -> break armed to ride its intro,
+        # pushed to the mixer's voice queue when that track hits the air
+        self.pending_talkover: dict[str, BreakItem] = {}
         # timing diagnostics: what's on air and how long it should run
         self._on_air: tuple[str, float | None, float] | None = None  # label, expected_s, monotonic
 
@@ -156,10 +160,23 @@ class Station:
             items: list[Track | BreakItem] = list(plan.tracks)
             if plan.break_after is not None and plan.break_script:
                 audio = render_break(plan.break_script, self.settings)
-                items.insert(
-                    plan.break_after + 1,
-                    BreakItem(audio.path, plan.break_script, audio.duration),
+                brk = BreakItem(audio.path, plan.break_script, audio.duration)
+                target = (
+                    plan.tracks[plan.break_after + 1]
+                    if plan.break_after + 1 < len(plan.tracks) else None
                 )
+                if self._talkover_fits(brk, target):
+                    assert target is not None  # _talkover_fits guarantees
+                    self.pending_talkover[str(target.abs_path)] = brk
+                    log.info(
+                        "talkover armed: %.1fs break rides %s — %s "
+                        "(intro %.1fs)",
+                        brk.duration, target.display_artist,
+                        target.display_title,
+                        self.catalog.intro_len(target.hash) or 0.0,
+                    )
+                else:
+                    items.insert(plan.break_after + 1, brk)
             self.picker.mark_planned(t.hash for t in plan.tracks if t.hash)
             if plan.note:
                 self.radio_db.record_event("dj_note", data={"note": plan.note})
@@ -169,6 +186,49 @@ class Station:
             log.exception("set planning failed — shuffle covers this stretch")
         finally:
             self.planning = False
+
+    def _talkover_fits(self, brk: BreakItem, target: Track | None) -> bool:
+        """A break rides the next track's intro only when the measured quiet
+        window holds the whole thing: entry latency, speech, and a release
+        before the song proper. Anything else airs standalone — a talk-over
+        that runs into vocals is worse than no talk-over at all."""
+        if not self.settings.talkover_enabled or target is None:
+            return False
+        intro = self.catalog.intro_len(target.hash)
+        return (
+            intro is not None
+            and brk.duration + self.settings.talkover_margin_s <= intro
+        )
+
+    def push_talkover(self, brk: BreakItem, track: Track) -> None:
+        """Hand an armed break to the mixer's voice queue. Worker thread;
+        a failed push loses the break, never the music."""
+        url = f"http://127.0.0.1:{self.settings.harbor_port}/voice"
+        try:
+            resp = httpx.post(url, content=str(brk.wav), timeout=5)
+            resp.raise_for_status()
+        except httpx.RemoteProtocolError:
+            # harbor queues the voice before answering; a dropped socket
+            # after the write almost certainly means "queued, then hung up"
+            # (seen with handlers that return no body). Record it — a break
+            # that aired without its transcript is worse than this risk.
+            log.warning("talkover push got no HTTP response — assuming queued")
+        except httpx.HTTPError:
+            log.exception("talkover push failed — break lost, music unaffected")
+            return
+        self.radio_db.record_event(
+            "break_aired",
+            data={
+                "transcript": brk.transcript,
+                "mode": "talkover",
+                "over": f"{track.display_artist} — {track.display_title}",
+            },
+        )
+        log.info(
+            "talkover on air: %.1fs over %s — %s (intro window %.1fs)",
+            brk.duration, track.display_artist, track.display_title,
+            self.catalog.intro_len(track.hash) or 0.0,
+        )
 
     def make_break(self) -> None:
         """Standalone forced break → front of the deck (airs in ~2 tracks).
@@ -259,6 +319,13 @@ def build_app(settings: Settings) -> FastAPI:
             ))
             return JSONResponse({"recorded": False})
         station.radio_db.record_play(track, context="rotation")
+        armed = station.pending_talkover.pop(event.filename, None)
+        if armed is not None:
+            # the track just hit the mixer: the voice enters now, riding
+            # the intro the fit-check already measured
+            asyncio.create_task(
+                asyncio.to_thread(station.push_talkover, armed, track)
+            )
         show_later(NowPlaying(
             station=station.settings.station_name,
             started_at=now_iso(),
@@ -289,7 +356,8 @@ def build_app(settings: Settings) -> FastAPI:
         station: Station = request.app.state.station
         if not station.dj.on_shift:
             return JSONResponse({"ok": False, "reason": "DJ not on shift"}, 503)
-        if station.break_busy or station.pending_break is not None:
+        queued = any(isinstance(i, BreakItem) for i in station.deck)
+        if station.break_busy or queued:
             return JSONResponse({"ok": False, "reason": "break already in flight"}, 409)
         station.break_busy = True
         asyncio.create_task(asyncio.to_thread(station.make_break))

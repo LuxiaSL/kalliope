@@ -22,14 +22,16 @@ from .models import now_iso
 
 log = logging.getLogger(__name__)
 
-# trim engine silence from both edges, then add deliberate breathing room:
-# 0.25s lead-in and 0.4s tail so the mixer's cross window eats padding,
-# never words
+# trim engine silence from both edges, level to a broadcast-consistent
+# -16 LUFS (engines differ wildly; talk-overs need a predictable voice
+# above the ducked bed), then add deliberate breathing room: 0.25s lead-in
+# and 0.4s tail so the mixer's cross window eats padding, never words
 _POLISH_FILTER = (
     "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.1,"
     "areverse,"
     "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.1,"
     "areverse,"
+    "loudnorm=I=-16:TP=-1.5:LRA=11,"
     "adelay=250,apad=pad_dur=0.4"
 )
 
@@ -57,7 +59,8 @@ def _polish(raw: Path, out: Path, *, filtered: bool = True) -> None:
     edge silence and padding when ``filtered``. Raises TTSError on failure."""
     cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(raw)]
     if filtered:
-        cmd += ["-af", _POLISH_FILTER]
+        # loudnorm upsamples internally; pin the rate back down
+        cmd += ["-af", _POLISH_FILTER, "-ar", "44100"]
     cmd += ["-c:a", "pcm_s16le", str(out)]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=60)

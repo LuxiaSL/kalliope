@@ -47,6 +47,36 @@ radio.on_track(synchronous=false, notify_aired)
 radio = normalize(radio)
 radio = crossfade(fade_in=1., fade_out=2., duration=3., radio)
 
+# --- the voice: talk-over breaks (SPEC §1.2) -------------------------------
+# The server pushes a break WAV here when it should ride over the incoming
+# track's intro instead of airing standalone. smooth_add ducks the music to
+# `duck` while the voice plays and releases when it ends — the server only
+# arms talk-overs that fit the measured intro window, so the release lands
+# before the song proper.
+duck = float_of_string(default=0.2,
+  environment.get("KALLIOPE_DUCK", default="0.2"))
+voice_gain = float_of_string(default=1.0,
+  environment.get("KALLIOPE_VOICE_GAIN", default="1.0"))
+voice_q = request.queue(id="voice")
+voice = amplify(voice_gain, voice_q)
+
+# full register API: the .simple variant treats the handler's return value
+# as the raw wire response (no status line — clients see HTTP/0.9), so build
+# a real response instead
+def push_voice(req, resp) =
+  wav = string.trim(req.body())
+  if wav != "" then
+    voice_q.push(request.create(wav))
+    log.important(label="kalliope", "talkover voice queued: #{wav}")
+  end
+  resp.status_code(200)
+  resp.content_type("text/plain")
+  resp.data("queued")
+end
+harbor.http.register(port=harbor_port, method="POST", "/voice", push_voice)
+
+radio = smooth_add(duration=0.8, p=duck, normal=radio, special=voice)
+
 # the station never stops: silence beats a dead process (proper
 # shuffle-from-catalog fallback arrives with the DJ split, SPEC §1.2)
 radio = mksafe(radio)
