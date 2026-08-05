@@ -63,10 +63,14 @@
       if (!r.ok) { statusEl.textContent = s.reason || "no access"; return; }
       document.querySelectorAll("#modes button").forEach(b =>
         b.classList.toggle("on", b.dataset.mode === s.power));
+      const sp = s.spend || {};
+      const row = (w) => sp[w] ? `$${sp[w].usd.toFixed(2)}` : "—";
       statusEl.innerHTML =
-        `power: <b>${s.power}</b> · Cal is ${s.dj_on_the_clock ? "on the clock" : "off the clock"}<br>` +
+        `power: <b>${s.power}</b> · Cal is ${s.dj_on_the_clock ? "on the clock" : "off the clock"} (${s.dj_model})<br>` +
         `${s.listeners} listening · ${s.deck} on deck` +
-        (s.planning ? " · planning now" : "");
+        (s.planning ? " · planning now" : "") + `<br>` +
+        `spend: ${row("today")} today · ${row("week")} 7d · ${row("month")} 30d · ${row("all")} ever` +
+        (sp.month ? `<br>voice: ${(sp.month.tts_chars / 1000).toFixed(1)}k chars this month` : "");
     } catch (e) { statusEl.textContent = "station unreachable"; }
   }
 

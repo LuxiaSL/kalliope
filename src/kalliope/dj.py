@@ -147,6 +147,9 @@ class DJ:
         self._settings = settings
         self._client: anthropic.Anthropic | None = None
         self._persona: str | None = None
+        # set by the server: records paid calls into the spend ledger.
+        # Signature matches RadioDB.record_usage; None = no metering.
+        self.usage_hook = None
         if not settings.dj_enabled:
             log.info("DJ disabled by config")
             return
@@ -163,6 +166,22 @@ class DJ:
     @property
     def on_shift(self) -> bool:
         return self._client is not None
+
+    def _meter(self, kind: str, usage) -> None:
+        """Report one API call's tokens to the spend ledger; never raises."""
+        if self.usage_hook is None:
+            return
+        try:
+            self.usage_hook(
+                kind,
+                model=self._settings.dj_model,
+                in_tokens=getattr(usage, "input_tokens", 0) or 0,
+                out_tokens=getattr(usage, "output_tokens", 0) or 0,
+                cache_read=getattr(usage, "cache_read_input_tokens", 0) or 0,
+                cache_write=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+            )
+        except Exception:
+            log.exception("usage metering failed — spend undercounts")
 
     def write_break(self, state_doc: str) -> BreakScript:
         """One Claude call, structured output. Raises DJError on any failure."""
@@ -184,6 +203,7 @@ class DJ:
             )
         except anthropic.APIError as e:
             raise DJError(f"API call failed: {e}") from e
+        self._meter("break", response.usage)
         if response.stop_reason == "refusal":
             raise DJError("model declined to write this break")
         parsed = response.parsed_output
@@ -236,6 +256,7 @@ class DJ:
         except anthropic.APIError:
             log.exception("memory-forming call failed — chronicle will retry")
             return ""
+        self._meter("memory", response.usage)
         text = "".join(
             b.text for b in response.content if getattr(b, "type", "") == "text"
         ).strip()
@@ -357,6 +378,7 @@ class DJ:
             )
             usage_in = usage_out = 0
             for i, message in enumerate(runner):
+                self._meter("plan", message.usage)
                 usage_in += message.usage.input_tokens
                 usage_out += message.usage.output_tokens
                 if message.stop_reason == "refusal":

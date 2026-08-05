@@ -57,6 +57,23 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_at ON events (at);
 
+-- API spend ledger: one row per paid call (LLM tokens priced at insert
+-- time so history survives model/price changes; TTS tracked as characters
+-- since ElevenLabs credits->$ depends on the plan).
+CREATE TABLE IF NOT EXISTS usage (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  kind TEXT NOT NULL,          -- 'plan','break','memory','genre','tts'
+  model TEXT,
+  in_tokens INTEGER DEFAULT 0,
+  out_tokens INTEGER DEFAULT 0,
+  cache_read_tokens INTEGER DEFAULT 0,
+  cache_write_tokens INTEGER DEFAULT 0,
+  tts_chars INTEGER DEFAULT 0,
+  cost_usd REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_usage_at ON usage (at);
+
 -- Cal's long-term memory: the chronicle forest (chapters -> arcs), ported
 -- from heimdall's CSPN. Raw material = events; chronicle_meta tracks the
 -- fold high-water mark.
@@ -193,6 +210,69 @@ class RadioDB:
             log.exception("failed to read recent plays for state doc")
             return []
         return [dict(r) for r in rows]
+
+    # --- API spend ledger -------------------------------------------------
+
+    # $ per million tokens (input, output); cache reads bill at 0.1x input,
+    # cache writes at 1.25x. Unknown models fall back to opus pricing.
+    _PRICES = {
+        "claude-fable-5": (10.0, 50.0),
+        "claude-opus-5": (5.0, 25.0),
+        "claude-opus-4-8": (5.0, 25.0),
+        "claude-sonnet-5": (3.0, 15.0),
+        "claude-haiku-4-5": (1.0, 5.0),
+    }
+
+    def record_usage(
+        self, kind: str, *, model: str | None = None,
+        in_tokens: int = 0, out_tokens: int = 0,
+        cache_read: int = 0, cache_write: int = 0, tts_chars: int = 0,
+    ) -> None:
+        p_in, p_out = self._PRICES.get(model or "", (5.0, 25.0))
+        cost = (
+            in_tokens * p_in
+            + cache_read * 0.1 * p_in
+            + cache_write * 1.25 * p_in
+            + out_tokens * p_out
+        ) / 1_000_000 if model else 0.0
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO usage (at, kind, model, in_tokens, out_tokens, "
+                    " cache_read_tokens, cache_write_tokens, tts_chars, cost_usd) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (now_iso(), kind, model, in_tokens, out_tokens,
+                     cache_read, cache_write, tts_chars, round(cost, 6)),
+                )
+        except sqlite3.Error:
+            log.exception("failed to record usage — spend meter undercounts")
+
+    def spend_summary(self) -> dict[str, dict[str, float]]:
+        """Cost + TTS characters for today / 7 days / 30 days / all time."""
+        out: dict[str, dict[str, float]] = {}
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        windows = {
+            "today": now.strftime("%Y-%m-%dT00:00:00"),
+            "week": (now - timedelta(days=7)).isoformat(timespec="seconds"),
+            "month": (now - timedelta(days=30)).isoformat(timespec="seconds"),
+            "all": "0000",
+        }
+        try:
+            for name, cutoff in windows.items():
+                row = self._conn.execute(
+                    "SELECT COALESCE(SUM(cost_usd),0) AS usd, "
+                    " COALESCE(SUM(tts_chars),0) AS chars, COUNT(*) AS calls "
+                    "FROM usage WHERE at >= ?", (cutoff,),
+                ).fetchone()
+                out[name] = {
+                    "usd": round(row["usd"], 2),
+                    "tts_chars": int(row["chars"]),
+                    "calls": int(row["calls"]),
+                }
+        except sqlite3.Error:
+            log.exception("spend summary failed")
+        return out
 
     # --- chronicle store (used by chronicle.Chronicle) --------------------
 

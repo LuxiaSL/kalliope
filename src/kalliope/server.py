@@ -52,6 +52,7 @@ class Station:
         self.radio_db = RadioDB(settings.catalog_db)
         self.picker = Picker(self.catalog, self.radio_db, settings.no_repeat_hours)
         self.dj = DJ(settings)
+        self.dj.usage_hook = self.radio_db.record_usage
         self.chronicle = Chronicle(self.radio_db, self.dj.write_memory)
         self.now_playing = NowPlaying(station=settings.station_name)
         # who -> tuned-in-since; keyed by harbor's client ip (tokens later)
@@ -221,6 +222,10 @@ class Station:
             items: list[Track | BreakItem] = list(plan.tracks)
             if plan.break_after is not None and plan.break_script:
                 audio = render_break(plan.break_script, self.settings)
+                if audio.backend == "elevenlabs":
+                    self.radio_db.record_usage(
+                        "tts", tts_chars=len(plan.break_script)
+                    )
                 brk = BreakItem(audio.path, plan.break_script, audio.duration)
                 target = (
                     plan.tracks[plan.break_after + 1]
@@ -300,6 +305,8 @@ class Station:
         try:
             result = self.dj.write_break(self._state_doc(occasion))
             audio = render_break(result.script, self.settings)
+            if audio.backend == "elevenlabs":
+                self.radio_db.record_usage("tts", tts_chars=len(result.script))
             if result.note:
                 self.radio_db.record_event("dj_note", data={"note": result.note})
             self.deck.appendleft(
@@ -481,9 +488,11 @@ def build_app(settings: Settings) -> FastAPI:
         return JSONResponse({
             "power": station.power,
             "dj_on_the_clock": station.dj_active(),
+            "dj_model": station.settings.dj_model,
             "listeners": len(station.listeners),
             "deck": len(station.deck),
             "planning": station.planning,
+            "spend": station.radio_db.spend_summary(),
         })
 
     @app.post("/admin/power")
