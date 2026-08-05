@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#14121a">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>kalliope</title>
 <style>
   :root {
@@ -72,10 +76,12 @@
         npTitle.textContent = now.track.title || now.track.path;
         npArtist.textContent = (now.track.artist || "").split("/")[0];
         npGenres.textContent = (now.genres || []).slice(0, 4).join(" · ");
+        setLockscreen(npTitle.textContent, npArtist.textContent);
       } else if (now.source_context === "break") {
         npTitle.textContent = "· station break ·";
         npArtist.textContent = "";
         npGenres.textContent = "";
+        setLockscreen("station break", "Cal");
       } else {
         npTitle.textContent = "";
         npArtist.textContent = "";
@@ -100,6 +106,7 @@
       tune.textContent = "tune out";
       tune.classList.add("on");
       status.textContent = "on air";
+      setLockscreen(npTitle.textContent, npArtist.textContent);
     }).catch(() => { status.textContent = "could not tune in"; });
   }
 
@@ -113,6 +120,10 @@
     tune.textContent = "tune in";
     tune.classList.remove("on");
     status.textContent = label || "off";
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.playbackState = "none";
+      navigator.mediaSession.metadata = null;
+    }
   }
 
   tune.addEventListener("click", () => (tunedIn ? tuneOut() : tuneIn()));
@@ -123,6 +134,30 @@
   if ("mediaSession" in navigator) {
     navigator.mediaSession.setActionHandler("play", tuneIn);
     navigator.mediaSession.setActionHandler("pause", () => tuneOut());
+  }
+
+  // lockscreen / notification metadata (the phone's now-playing card)
+  function setLockscreen(title, artist) {
+    if (!("mediaSession" in navigator) || !tunedIn) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: title || "kalliope",
+      artist: artist || "",
+      album: "kalliope",
+      artwork: [
+        { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+        { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      ],
+    });
+    navigator.mediaSession.playbackState = "playing";
+  }
+
+  // a live stream has no scrubber; hiding seek keeps lockscreens honest
+  for (const a of ["seekbackward", "seekforward", "seekto"]) {
+    try { navigator.mediaSession.setActionHandler(a, null); } catch (e) {}
+  }
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
 
   // drift-snap: network stalls accumulate as behind-live buffer; if we've

@@ -468,6 +468,24 @@ def build_app(settings: Settings) -> FastAPI:
         )
         return HTMLResponse(html)
 
+    # PWA surface: these live at the root (a service worker's scope can't
+    # exceed the directory it is served from)
+    _PWA_FILES = {
+        "manifest.webmanifest": "application/manifest+json",
+        "sw.js": "text/javascript",
+        "icon-192.png": "image/png",
+        "icon-512.png": "image/png",
+        "icon-maskable.png": "image/png",
+    }
+
+    @app.get("/{asset}")
+    def pwa_asset(asset: str) -> Response:
+        media_type = _PWA_FILES.get(asset)
+        if media_type is None:
+            return PlainTextResponse("not found", status_code=404)
+        data = resources.files("kalliope").joinpath(f"static/{asset}").read_bytes()
+        return Response(content=data, media_type=media_type)
+
     return app
 
 

@@ -1,0 +1,14 @@
+{
+  "name": "kalliope",
+  "short_name": "kalliope",
+  "description": "A broadcast radio station with an LLM DJ. Tune in; it was already playing.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#14121a",
+  "theme_color": "#14121a",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
