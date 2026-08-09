@@ -29,6 +29,14 @@
           font: inherit; font-size: 0.8rem; padding: 0.5rem 0.8rem;
           border-radius: 6px; width: 18rem; max-width: 90%; }
   .hint { color: var(--dim); font-size: 0.7rem; margin-top: 0.6rem; }
+  #programrow { margin-top: 2rem; display: flex; gap: 0.5rem;
+                justify-content: center; flex-wrap: wrap; }
+  #minutes { width: 4.5rem; }
+  #brief { width: 13rem; }
+  #commission { background: none; border: 1px solid var(--dim);
+                color: var(--fg); font: inherit; font-size: 0.8rem;
+                padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; }
+  #commission:disabled { opacity: 0.4; cursor: default; }
 </style>
 </head>
 <body>
@@ -40,6 +48,11 @@
     <button data-mode="music">music</button>
   </div>
   <div id="status">…</div>
+  <div id="programrow">
+    <input id="minutes" type="number" min="10" max="360" placeholder="90">
+    <input id="brief" placeholder="what kind of show? (Cal's call if blank)">
+    <button id="commission">program</button>
+  </div>
   <div id="tokenrow">
     <input id="token" type="password" placeholder="admin token" autocomplete="off">
     <div class="hint">dj: Cal always on · auto: Cal works when someone's listening · music: no API at all</div>
@@ -68,7 +81,8 @@
       statusEl.innerHTML =
         `power: <b>${s.power}</b> · Cal is ${s.dj_on_the_clock ? "on the clock" : "off the clock"} (${s.dj_model})<br>` +
         `${s.listeners} listening · ${s.deck} on deck` +
-        (s.planning ? " · planning now" : "") + `<br>` +
+        (s.planning ? " · planning now" : "") +
+        (s.program ? `<br>program: <b>${s.program}</b>` : "") + `<br>` +
         `spend: ${row("today")} today · ${row("week")} 7d · ${row("month")} 30d · ${row("all")} ever` +
         (sp.month ? `<br>voice: ${(sp.month.tts_chars / 1000).toFixed(1)}k chars this month` : "");
     } catch (e) { statusEl.textContent = "station unreachable"; }
@@ -83,6 +97,25 @@
       });
       refresh();
     }));
+
+  const commissionBtn = document.getElementById("commission");
+  commissionBtn.addEventListener("click", async () => {
+    const minutes = Number(document.getElementById("minutes").value) || 90;
+    const brief = document.getElementById("brief").value.trim();
+    commissionBtn.disabled = true;
+    try {
+      const r = await fetch("/admin/program", {
+        method: "POST",
+        headers: { ...hdrs(), "Content-Type": "application/json" },
+        body: JSON.stringify({ minutes, brief }),
+      });
+      const s = await r.json();
+      statusEl.textContent = r.ok
+        ? `commissioned: ~${minutes} min — Cal is building the show`
+        : (s.reason || "commission failed");
+    } catch (e) { statusEl.textContent = "station unreachable"; }
+    setTimeout(() => { commissionBtn.disabled = false; refresh(); }, 4000);
+  });
 
   refresh();
   setInterval(refresh, 5000);
