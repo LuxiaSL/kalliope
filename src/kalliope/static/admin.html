@@ -49,8 +49,8 @@
   </div>
   <div id="status">…</div>
   <div id="programrow">
-    <input id="minutes" type="number" min="10" max="360" placeholder="90">
-    <input id="brief" placeholder="what kind of show? (Cal's call if blank)">
+    <input id="minutes" type="number" min="10" max="360" placeholder="min?">
+    <input id="brief" placeholder="what kind of show? (blanks = Cal's call)">
     <button id="commission">program</button>
   </div>
   <div id="tokenrow">
@@ -100,7 +100,8 @@
 
   const commissionBtn = document.getElementById("commission");
   commissionBtn.addEventListener("click", async () => {
-    const minutes = Number(document.getElementById("minutes").value) || 90;
+    const mv = document.getElementById("minutes").value;
+    const minutes = mv ? Number(mv) : null;
     const brief = document.getElementById("brief").value.trim();
     commissionBtn.disabled = true;
     try {
@@ -111,7 +112,7 @@
       });
       const s = await r.json();
       statusEl.textContent = r.ok
-        ? `commissioned: ~${minutes} min — Cal is building the show`
+        ? `commissioned${minutes ? `: ~${minutes} min` : " — length is Cal's call"} — building the show`
         : (s.reason || "commission failed");
     } catch (e) { statusEl.textContent = "station unreachable"; }
     setTimeout(() => { commissionBtn.disabled = false; refresh(); }, 4000);

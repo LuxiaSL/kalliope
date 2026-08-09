@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from .catalog import Catalog
 from .chronicle import Chronicle
 from .config import Settings, load_settings
-from .dj import DJ, TalkSegment, build_state_doc
+from .dj import DJ, PlannedProgram, TalkSegment, build_state_doc
 from .models import AiredEvent, NowPlaying, StationEvent, Track, now_iso
 from .picker import Picker
 from .radio_db import RadioDB
@@ -252,6 +252,11 @@ class Station:
                 self._state_doc(ask="plan"), self.catalog,
                 deck_view=self.deck_view,
             )
+            if isinstance(plan, PlannedProgram):
+                # the DJ decided the night earned a whole show
+                self._mount_program(plan, replace=False)
+                self.chronicle.maintain()
+                return
             items: list[Track | BreakItem] = list(plan.tracks)
             if plan.break_after is not None and plan.break_script:
                 audio = render_break(plan.break_script, self.settings)
@@ -293,10 +298,79 @@ class Station:
         finally:
             self.planning = False
 
-    def start_program(self, brief: str, minutes: float) -> None:
+    def _mount_program(
+        self,
+        program: PlannedProgram,
+        *,
+        replace: bool,
+        brief: str | None = None,
+        minutes: float | None = None,
+    ) -> None:
+        """Render a planned program's talks and put the show on the deck.
+        replace=True is a commission (the un-aired queue makes way for it);
+        replace=False is the DJ mounting a show of its own during rotation
+        upkeep, which extends what's queued. Raises on an unusable program."""
+        # render every talk up front (tape delay is the discipline here:
+        # the scripts were written to survive airing an hour later)
+        items: list[Track | BreakItem] = []
+        talkovers: list[tuple[BreakItem, Track]] = []
+        for idx, entry in enumerate(program.items):
+            if isinstance(entry, Track):
+                items.append(entry)
+                continue
+            assert isinstance(entry, TalkSegment)
+            try:
+                audio = render_break(entry.script, self.settings)
+            except Exception:
+                log.exception(
+                    "talk segment render failed — program continues without it"
+                )
+                continue
+            if audio.backend == "elevenlabs":
+                self.radio_db.record_usage("tts", tts_chars=len(entry.script))
+            brk = BreakItem(audio.path, entry.script, audio.duration, "program")
+            nxt = (program.items[idx + 1]
+                   if idx + 1 < len(program.items) else None)
+            if isinstance(nxt, Track) and self._talkover_fits(brk, nxt):
+                talkovers.append((brk, nxt))
+            else:
+                items.append(brk)
+        music = [i for i in items if isinstance(i, Track)]
+        if not music:
+            raise RuntimeError("program came back with no playable tracks")
+        for brk, target in talkovers:
+            self.pending_talkover[str(target.abs_path)] = brk
+            log.info("talkover armed (program): %.1fs rides %s — %s",
+                     brk.duration, target.display_artist,
+                     target.display_title)
+        self.picker.mark_planned(t.hash for t in music if t.hash)
+        dropped = 0
+        if replace:
+            dropped = len(self.deck)
+            # publish as adjacently as possible: /next may fire between these
+            self.deck.clear()
+        self.deck.extend(items)
+        self.current_program = program.title
+        if program.note:
+            self.radio_db.record_event("dj_note", data={"note": program.note})
+        self.radio_db.record_event("program_set", data={
+            "title": program.title,
+            "minutes": minutes,
+            "brief": brief,
+            "self_directed": brief is None,
+            "tracks": len(music),
+            "talks": len(items) - len(music) + len(talkovers),
+        })
+        log.info(
+            "program on deck: %r — %d items (%d queued items dropped)",
+            program.title, len(items), dropped,
+        )
+
+    def start_program(self, brief: str, minutes: float | None) -> None:
         """One commissioned-program pass → the un-aired deck is replaced by
-        the whole show. Worker thread; any failure is logged and swallowed —
-        the existing rotation stands when it does."""
+        the whole show. minutes None = the length is the DJ's own call.
+        Worker thread; any failure is logged and swallowed — the existing
+        rotation stands when it does."""
         try:
             doc = self._state_doc(
                 occasion=brief, ask="program", program_minutes=minutes
@@ -304,57 +378,8 @@ class Station:
             program = self.dj.plan_program(
                 doc, self.catalog, minutes, deck_view=self.deck_view
             )
-            # render every talk up front (tape delay is the discipline here:
-            # the scripts were written to survive airing an hour later)
-            items: list[Track | BreakItem] = []
-            talkovers: list[tuple[BreakItem, Track]] = []
-            for idx, entry in enumerate(program.items):
-                if isinstance(entry, Track):
-                    items.append(entry)
-                    continue
-                assert isinstance(entry, TalkSegment)
-                try:
-                    audio = render_break(entry.script, self.settings)
-                except Exception:
-                    log.exception(
-                        "talk segment render failed — program continues without it"
-                    )
-                    continue
-                if audio.backend == "elevenlabs":
-                    self.radio_db.record_usage("tts", tts_chars=len(entry.script))
-                brk = BreakItem(audio.path, entry.script, audio.duration, "program")
-                nxt = (program.items[idx + 1]
-                       if idx + 1 < len(program.items) else None)
-                if isinstance(nxt, Track) and self._talkover_fits(brk, nxt):
-                    talkovers.append((brk, nxt))
-                else:
-                    items.append(brk)
-            music = [i for i in items if isinstance(i, Track)]
-            if not music:
-                raise RuntimeError("program came back with no playable tracks")
-            for brk, target in talkovers:
-                self.pending_talkover[str(target.abs_path)] = brk
-                log.info("talkover armed (program): %.1fs rides %s — %s",
-                         brk.duration, target.display_artist,
-                         target.display_title)
-            self.picker.mark_planned(t.hash for t in music if t.hash)
-            dropped = len(self.deck)
-            # publish as adjacently as possible: /next may fire between these
-            self.deck.clear()
-            self.deck.extend(items)
-            self.current_program = program.title
-            if program.note:
-                self.radio_db.record_event("dj_note", data={"note": program.note})
-            self.radio_db.record_event("program_set", data={
-                "title": program.title,
-                "minutes": minutes,
-                "brief": brief,
-                "tracks": len(music),
-                "talks": len(items) - len(music) + len(talkovers),
-            })
-            log.info(
-                "program on deck: %r — %d items (%d queued items dropped)",
-                program.title, len(items), dropped,
+            self._mount_program(
+                program, replace=True, brief=brief, minutes=minutes
             )
         except Exception:
             log.exception("program planning failed — the rotation stands")
@@ -627,13 +652,15 @@ def build_app(settings: Settings) -> FastAPI:
             return JSONResponse({"ok": False, "reason": "bad or missing token"}, 403)
         try:
             body = await request.json()
-            minutes = float(body.get("minutes", 0))
+            raw_minutes = body.get("minutes")
+            minutes = float(raw_minutes) if raw_minutes else None
             brief = str(body.get("brief", "")).strip()
         except Exception:
             return JSONResponse({"ok": False, "reason": "bad request body"}, 422)
-        if not 10 <= minutes <= 360:
+        if minutes is not None and not 10 <= minutes <= 360:
             return JSONResponse(
-                {"ok": False, "reason": "minutes must be 10..360"}, 422
+                {"ok": False, "reason": "minutes must be 10..360 (or omitted "
+                                        "— then the length is Cal's call)"}, 422
             )
         if not station.dj.on_shift:
             return JSONResponse({"ok": False, "reason": "DJ not on shift"}, 503)
@@ -649,9 +676,11 @@ def build_app(settings: Settings) -> FastAPI:
             brief or "Your call entirely — program the show you want to make.",
             minutes,
         ))
-        return JSONResponse(
-            {"ok": True, "status": "programming", "minutes": minutes}
-        )
+        return JSONResponse({
+            "ok": True,
+            "status": "programming",
+            "minutes": minutes if minutes is not None else "Cal's call",
+        })
 
     @app.get("/admin", response_class=HTMLResponse)
     def admin_page() -> HTMLResponse:

@@ -99,6 +99,11 @@ Craft, in order of importance:
   dark is part of the job.
 - Sets are four to six tracks. Trust the next planning pass for what comes
   after; don't try to program the whole night at once.
+- Once in a while the night earns more than a set: company's here, there's
+  an occasion, a thread worth a whole hour. When it does, you may build a
+  shaped show instead — commit_program takes tracks and talk segments in
+  air order, any length you decide. It costs real planning and real
+  airtime, so it's for moments, not habit; most passes are sets.
 """
 
 
@@ -107,10 +112,11 @@ PROGRAM_BRIEF = f"""
 
 You've been commissioned to build a whole program — one shaped stretch of
 radio, planned in a single sitting and committed with commit_program. The
-commission says roughly how long; every track row carries duration_s, so
-keep a running total as you build and land near the target. commit_program
-echoes the arithmetic back, so if it says you're short or long, adjust and
-resubmit.
+commission may say roughly how long — land near that target — or leave the
+length to you: decide what the show wants to be and build to that. Every
+track row carries duration_s, so keep a running total as you go.
+commit_program echoes the arithmetic back; if it says you're short or
+long, adjust and resubmit.
 
 Craft, in order of importance:
 {CRAFT_NOTES}
@@ -205,10 +211,14 @@ def build_state_doc(
         lines += ["", "Set the decks: browse with your tools, then commit "
                       "the next set with set_the_decks."]
     elif ask == "program":
-        minutes = int(program_minutes or 60)
-        lines += ["", f"Build a program of about {minutes} minutes: browse "
-                      "with your tools, then commit the whole run — tracks "
-                      "and talk segments in air order — with commit_program."]
+        length = (
+            f"of about {int(program_minutes)} minutes"
+            if program_minutes
+            else "— the length is yours to decide"
+        )
+        lines += ["", f"Build a program {length}: browse with your tools, "
+                      "then commit the whole run — tracks and talk segments "
+                      "in air order — with commit_program."]
     else:
         lines += ["", "Write your next break."]
     return "\n".join(lines)
@@ -407,118 +417,15 @@ class DJ:
             tools.append(whats_queued)
         return tools
 
-    def plan_set(
-        self, state_doc: str, catalog: Catalog, deck_view=None
-    ) -> PlannedSet:
-        """Let the DJ browse the catalog with tools and program the next set.
-        Raises DJError on any failure — the shuffle fallback covers for it.
-        """
-        if self._client is None or self._persona is None:
-            raise DJError("DJ is not on shift")
-
-        committed: dict[str, PlannedSet] = {}
-
-        @beta_tool
-        def set_the_decks(
-            track_ids: list[int],
-            break_after: int = -1,
-            break_script: str = "",
-            note: str = "",
-        ) -> str:
-            """Commit the next set. Call exactly once, when you've decided.
-
-            Args:
-                track_ids: Ordered catalog ids, four to six of them.
-                break_after: Index into track_ids after which your break airs
-                    (0 = after the first track). -1 for no break this set.
-                break_script: The break, written for the ear, if break_after
-                    is not -1. Same craft rules as always.
-                note: Optional private note for the session log.
-            """
-            tracks = catalog.by_ids(track_ids)
-            if len(tracks) != len(track_ids):
-                missing = set(track_ids) - {t.id for t in tracks}
-                return f"error: unknown track ids {sorted(missing)} — check and resubmit"
-            if not 3 <= len(tracks) <= 8:
-                return "error: sets are four to six tracks (three to eight at the outside)"
-            if len({t.id for t in tracks}) != len(tracks):
-                return "error: a set doesn't repeat a track"
-            has_break = break_after >= 0
-            if has_break and not (0 <= break_after < len(tracks)):
-                return f"error: break_after must be -1 or 0..{len(tracks) - 1}"
-            if has_break and not break_script.strip():
-                return "error: break_after set but break_script is empty"
-            committed["plan"] = PlannedSet(
-                tracks=tracks,
-                break_after=break_after if has_break else None,
-                break_script=break_script.strip() if has_break else None,
-                note=note.strip() or None,
-            )
-            return "decks set"
-
-        try:
-            runner = self._client.beta.messages.tool_runner(
-                model=self._settings.dj_model,
-                max_tokens=4000,
-                system=[
-                    {"type": "text", "text": self._persona},
-                    {
-                        "type": "text",
-                        "text": PLANNING_BRIEF,
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                ],
-                messages=[{"role": "user", "content": state_doc}],
-                tools=self._browse_tools(catalog, deck_view) + [set_the_decks],
-            )
-            usage_in = usage_out = 0
-            last_text = ""
-            for i, message in enumerate(runner):
-                self._meter("plan", message.usage)
-                usage_in += message.usage.input_tokens
-                usage_out += message.usage.output_tokens
-                last_text = "".join(
-                    b.text for b in message.content
-                    if getattr(b, "type", "") == "text"
-                )
-                if message.stop_reason == "refusal":
-                    raise DJError("model declined to plan")
-                if "plan" in committed or i >= 10:
-                    break
-        except anthropic.APIError as e:
-            raise DJError(f"planning call failed: {e}") from e
-        plan = committed.get("plan")
-        if plan is None:
-            # keep what the model said instead — the difference between a
-            # mystery and a prompt bug
-            raise DJError(
-                "planner finished without setting the decks; it said: "
-                f"{last_text[:300]!r}"
-            )
-        log.info(
-            "decks set: %d tracks, break %s (%d in / %d out tokens)",
-            len(plan.tracks),
-            f"after #{plan.break_after}" if plan.break_after is not None else "none",
-            usage_in,
-            usage_out,
-        )
-        return plan
-
-    def plan_program(
+    def _commit_program_tool(
         self,
-        state_doc: str,
         catalog: Catalog,
-        target_min: float,
-        deck_view=None,
-    ) -> PlannedProgram:
-        """A commissioned show: one agentic pass builds an arbitrary-length
-        run of tracks and talk segments. Raises DJError on any failure —
-        the caller keeps its existing deck when it does."""
-        if self._client is None or self._persona is None:
-            raise DJError("DJ is not on shift")
-
-        target_s = max(10.0, float(target_min)) * 60
-        committed: dict[str, PlannedProgram] = {}
+        committed: dict[str, PlannedSet | PlannedProgram],
+        target_s: float | None,
+    ):
+        """The commit_program tool, shared by both planning modes. With a
+        target, the duration must land near it; without one, the length is
+        the model's own call (inside sane broadcast bounds)."""
 
         @beta_tool
         def commit_program(items: list[dict], title: str, note: str = "") -> str:
@@ -577,13 +484,21 @@ class DJ:
                 else:
                     total_s += 240.0   # untagged length: call it four minutes
                     untagged += 1
-            if not 0.75 * target_s <= total_s <= 1.3 * target_s:
-                gap_min = (target_s - total_s) / 60
-                fix = (f"add about {gap_min:.0f} more minutes" if gap_min > 0
-                       else f"trim about {-gap_min:.0f} minutes")
-                return (f"error: the program runs ~{total_s / 60:.0f} minutes "
-                        f"against a target of ~{target_s / 60:.0f} — {fix} "
-                        "and resubmit")
+            if target_s is not None:
+                if not 0.75 * target_s <= total_s <= 1.3 * target_s:
+                    gap_min = (target_s - total_s) / 60
+                    fix = (f"add about {gap_min:.0f} more minutes"
+                           if gap_min > 0
+                           else f"trim about {-gap_min:.0f} minutes")
+                    return (f"error: the program runs ~{total_s / 60:.0f} "
+                            f"minutes against a target of ~{target_s / 60:.0f}"
+                            f" — {fix} and resubmit")
+            elif total_s < 15 * 60:
+                return (f"error: ~{total_s / 60:.0f} minutes is a set, not a "
+                        "program — build it out")
+            elif total_s > 6 * 3600:
+                return (f"error: ~{total_s / 3600:.1f} hours is past a single "
+                        "show — trim it")
             committed["program"] = PlannedProgram(
                 items=[tracks[v] if k == "track"
                        else TalkSegment(script=str(v))
@@ -598,6 +513,137 @@ class DJ:
                 report += (f" ({untagged} tracks had no tagged length, "
                            "counted at four minutes each)")
             return report
+
+        return commit_program
+
+    def plan_set(
+        self, state_doc: str, catalog: Catalog, deck_view=None
+    ) -> PlannedSet | PlannedProgram:
+        """Let the DJ browse the catalog with tools and program what's next —
+        usually a set; a whole show when it decides the night earned one.
+        Raises DJError on any failure — the shuffle fallback covers for it.
+        """
+        if self._client is None or self._persona is None:
+            raise DJError("DJ is not on shift")
+
+        committed: dict[str, PlannedSet | PlannedProgram] = {}
+
+        @beta_tool
+        def set_the_decks(
+            track_ids: list[int],
+            break_after: int = -1,
+            break_script: str = "",
+            note: str = "",
+        ) -> str:
+            """Commit the next set. Call exactly once, when you've decided.
+
+            Args:
+                track_ids: Ordered catalog ids, four to six of them.
+                break_after: Index into track_ids after which your break airs
+                    (0 = after the first track). -1 for no break this set.
+                break_script: The break, written for the ear, if break_after
+                    is not -1. Same craft rules as always.
+                note: Optional private note for the session log.
+            """
+            tracks = catalog.by_ids(track_ids)
+            if len(tracks) != len(track_ids):
+                missing = set(track_ids) - {t.id for t in tracks}
+                return f"error: unknown track ids {sorted(missing)} — check and resubmit"
+            if not 3 <= len(tracks) <= 8:
+                return "error: sets are four to six tracks (three to eight at the outside)"
+            if len({t.id for t in tracks}) != len(tracks):
+                return "error: a set doesn't repeat a track"
+            has_break = break_after >= 0
+            if has_break and not (0 <= break_after < len(tracks)):
+                return f"error: break_after must be -1 or 0..{len(tracks) - 1}"
+            if has_break and not break_script.strip():
+                return "error: break_after set but break_script is empty"
+            committed["plan"] = PlannedSet(
+                tracks=tracks,
+                break_after=break_after if has_break else None,
+                break_script=break_script.strip() if has_break else None,
+                note=note.strip() or None,
+            )
+            return "decks set"
+
+        try:
+            runner = self._client.beta.messages.tool_runner(
+                model=self._settings.dj_model,
+                max_tokens=4000,
+                system=[
+                    {"type": "text", "text": self._persona},
+                    {
+                        "type": "text",
+                        "text": PLANNING_BRIEF,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+                messages=[{"role": "user", "content": state_doc}],
+                tools=(self._browse_tools(catalog, deck_view)
+                       + [set_the_decks,
+                          self._commit_program_tool(catalog, committed, None)]),
+            )
+            usage_in = usage_out = 0
+            last_text = ""
+            for i, message in enumerate(runner):
+                self._meter("plan", message.usage)
+                usage_in += message.usage.input_tokens
+                usage_out += message.usage.output_tokens
+                last_text = "".join(
+                    b.text for b in message.content
+                    if getattr(b, "type", "") == "text"
+                )
+                if message.stop_reason == "refusal":
+                    raise DJError("model declined to plan")
+                if committed or i >= 10:
+                    break
+        except anthropic.APIError as e:
+            raise DJError(f"planning call failed: {e}") from e
+        program = committed.get("program")
+        if isinstance(program, PlannedProgram):
+            log.info(
+                "planner chose a whole show: %r — %d items "
+                "(%d in / %d out tokens)",
+                program.title, len(program.items), usage_in, usage_out,
+            )
+            return program
+        plan = committed.get("plan")
+        if plan is None:
+            # keep what the model said instead — the difference between a
+            # mystery and a prompt bug
+            raise DJError(
+                "planner finished without setting the decks; it said: "
+                f"{last_text[:300]!r}"
+            )
+        assert isinstance(plan, PlannedSet)  # only set_the_decks writes "plan"
+        log.info(
+            "decks set: %d tracks, break %s (%d in / %d out tokens)",
+            len(plan.tracks),
+            f"after #{plan.break_after}" if plan.break_after is not None else "none",
+            usage_in,
+            usage_out,
+        )
+        return plan
+
+    def plan_program(
+        self,
+        state_doc: str,
+        catalog: Catalog,
+        target_min: float | None,
+        deck_view=None,
+    ) -> PlannedProgram:
+        """A commissioned show: one agentic pass builds an arbitrary-length
+        run of tracks and talk segments. target_min None = the length is the
+        DJ's own call. Raises DJError on any failure — the caller keeps its
+        existing deck when it does."""
+        if self._client is None or self._persona is None:
+            raise DJError("DJ is not on shift")
+
+        target_s = (
+            max(10.0, float(target_min)) * 60 if target_min else None
+        )
+        committed: dict[str, PlannedSet | PlannedProgram] = {}
+        commit_program = self._commit_program_tool(catalog, committed, target_s)
 
         try:
             runner = self._client.beta.messages.tool_runner(
@@ -636,6 +682,7 @@ class DJ:
                 "programmer finished without committing; it said: "
                 f"{last_text[:300]!r}"
             )
+        assert isinstance(program, PlannedProgram)
         log.info(
             "program committed: %r — %d items (%d in / %d out tokens)",
             program.title, len(program.items), usage_in, usage_out,
