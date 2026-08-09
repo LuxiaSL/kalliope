@@ -259,28 +259,35 @@ class Station:
                 return
             items: list[Track | BreakItem] = list(plan.tracks)
             if plan.break_after is not None and plan.break_script:
-                audio = render_break(plan.break_script, self.settings)
-                if audio.backend == "elevenlabs":
-                    self.radio_db.record_usage(
-                        "tts", tts_chars=len(plan.break_script)
+                # a dead voice must never cost the music: render failures
+                # drop the break, not the set
+                audio = None
+                try:
+                    audio = render_break(plan.break_script, self.settings)
+                except Exception:
+                    log.exception("break render failed — the set airs without it")
+                if audio is not None:
+                    if audio.backend == "elevenlabs":
+                        self.radio_db.record_usage(
+                            "tts", tts_chars=len(plan.break_script)
+                        )
+                    brk = BreakItem(audio.path, plan.break_script, audio.duration)
+                    target = (
+                        plan.tracks[plan.break_after + 1]
+                        if plan.break_after + 1 < len(plan.tracks) else None
                     )
-                brk = BreakItem(audio.path, plan.break_script, audio.duration)
-                target = (
-                    plan.tracks[plan.break_after + 1]
-                    if plan.break_after + 1 < len(plan.tracks) else None
-                )
-                if self._talkover_fits(brk, target):
-                    assert target is not None  # _talkover_fits guarantees
-                    self.pending_talkover[str(target.abs_path)] = brk
-                    log.info(
-                        "talkover armed: %.1fs break rides %s — %s "
-                        "(intro %.1fs)",
-                        brk.duration, target.display_artist,
-                        target.display_title,
-                        self.catalog.intro_len(target.hash) or 0.0,
-                    )
-                else:
-                    items.insert(plan.break_after + 1, brk)
+                    if self._talkover_fits(brk, target):
+                        assert target is not None  # _talkover_fits guarantees
+                        self.pending_talkover[str(target.abs_path)] = brk
+                        log.info(
+                            "talkover armed: %.1fs break rides %s — %s "
+                            "(intro %.1fs)",
+                            brk.duration, target.display_artist,
+                            target.display_title,
+                            self.catalog.intro_len(target.hash) or 0.0,
+                        )
+                    else:
+                        items.insert(plan.break_after + 1, brk)
             self.picker.mark_planned(t.hash for t in plan.tracks if t.hash)
             if plan.note:
                 self.radio_db.record_event("dj_note", data={"note": plan.note})
